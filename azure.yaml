@@ -1,0 +1,18 @@
+name: advanced-auditing
+metadata:
+  template: advanced-auditing@0.0.1
+infra:
+  provider: bicep
+  path: infra
+workflows:
+  up:
+    - azd: provision
+hooks:
+  preprovision:
+    shell: pwsh
+    run: .\hooks\preprovision.ps1
+    interactive: true
+  postprovision:
+    shell: pwsh
+    run: .\hooks\postprovision.ps1
+    interactive: true
