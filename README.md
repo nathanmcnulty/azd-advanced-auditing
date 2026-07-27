@@ -13,7 +13,7 @@ The template provisions an Azure Automation account, creates a PowerShell 7.4 ru
 
 - An Azure resource group named `rg-<AZURE_ENV_NAME>` by default, or a custom group if `AZURE_RESOURCE_GROUP` is already set in the azd environment
 - An Azure Automation account named `aaaudit<environment-suffix>`
-- A PowerShell 7.4 runtime environment with Exchange Online dependencies
+- A PowerShell 7.4 runtime environment with ExchangeOnlineManagement 3.10.1 or newer
 - Three Automation runbooks:
   - `Enable-AdvancedAuditing`
   - `Validate-ExchangeManagedIdentity`
@@ -48,7 +48,7 @@ You need:
   - `AppRoleAssignment.ReadWrite.All`
   - `Domain.Read.All`
 
-The postprovision hook installs missing PowerShell modules for the current user when needed.
+The postprovision hook installs ExchangeOnlineManagement 3.10.1 or newer for the current user when needed.
 
 ## Usage
 
@@ -93,6 +93,7 @@ During `preprovision`, the template derives the Automation account name from `AZ
 - The postprovision hook immediately replaces that placeholder content with the local runbook files from this repository.
 - The main runbook is based on the current public `Enable-AdvancedAuditing.ps1` logic and adds support for pulling the Exchange organization value from an Automation variable.
 - The validation flow is designed around the limited Exchange RBAC granted to the managed identity, so the validation runbooks focus on mailbox access and auditing values rather than broader tenant-wide cmdlets.
+- The Automation runtime is pinned to ExchangeOnlineManagement 3.10.1, and all runbooks reject older versions.
 
 ## Previously validated execution path
 
@@ -108,3 +109,7 @@ That execution also verified the fixes now preserved in this repository for:
 - PowerShell URI interpolation
 - ARM job-schedule linking
 - Exchange role-group membership handling
+
+## ExchangeOnlineManagement 3.10.1 retest
+
+The `exec06301350` environment was redeployed with ExchangeOnlineManagement 3.10.1. The Automation runtime reported version 3.10.1, and `Validate-ExchangeManagedIdentity` completed successfully. `Enable-AdvancedAuditing` still failed at `Set-Mailbox` with `Microsoft.Exchange.Configuration.Tasks.CmdletNeedsProxyException`, so upgrading the module did not resolve that service-side behavior.

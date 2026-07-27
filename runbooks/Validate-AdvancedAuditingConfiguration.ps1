@@ -41,6 +41,18 @@ function Test-ContainsAll {
 }
 
 $exchangeOrganization = Get-ExchangeOrganization -ConfiguredValue $Organization
+$minimumExchangeOnlineManagementVersion = [version]'3.10.1'
+$exchangeOnlineManagementModule = Get-Module -ListAvailable -Name 'ExchangeOnlineManagement' |
+  Where-Object { $_.Version -ge $minimumExchangeOnlineManagementVersion } |
+  Sort-Object Version -Descending |
+  Select-Object -First 1
+
+if (-not $exchangeOnlineManagementModule) {
+  throw "ExchangeOnlineManagement version $minimumExchangeOnlineManagementVersion or newer is not available in the Automation runtime."
+}
+
+Import-Module -Name $exchangeOnlineManagementModule.Path -Force
+Write-Output "Using ExchangeOnlineManagement $($exchangeOnlineManagementModule.Version)."
 
 $expectedAdmin = @('MailItemsAccessed', 'Send')
 $expectedDelegate = @('MailItemsAccessed')

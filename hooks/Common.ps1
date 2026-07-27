@@ -19,16 +19,21 @@ function Ensure-Command {
 function Ensure-PowerShellModule {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
-    [Parameter(Mandatory = $false)][string]$RequiredVersion
+    [Parameter(Mandatory = $false)][string]$MinimumVersion
   )
 
   $available = @(Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending)
+  $minimum = $null
+  if (-not [string]::IsNullOrWhiteSpace($MinimumVersion)) {
+    $minimum = [version]$MinimumVersion
+  }
+
   if ($available.Count -gt 0) {
-    if ([string]::IsNullOrWhiteSpace($RequiredVersion)) {
+    if ($null -eq $minimum) {
       return
     }
 
-    $versionMatch = $available | Where-Object { $_.Version -eq [version]$RequiredVersion } | Select-Object -First 1
+    $versionMatch = $available | Where-Object { $_.Version -ge $minimum } | Select-Object -First 1
     if ($versionMatch) {
       return
     }
@@ -42,11 +47,16 @@ function Ensure-PowerShellModule {
     Repository   = 'PSGallery'
   }
 
-  if (-not [string]::IsNullOrWhiteSpace($RequiredVersion)) {
-    $installParams['RequiredVersion'] = $RequiredVersion
+  if ($null -ne $minimum) {
+    $installParams['MinimumVersion'] = $minimum
   }
 
   Install-Module @installParams -WarningAction SilentlyContinue
+
+  $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object { $_.Version -ge $minimum })
+  if ($null -ne $minimum -and $installed.Count -eq 0) {
+    throw "PowerShell module '$Name' version $MinimumVersion or newer could not be installed."
+  }
 }
 
 function Get-TemplateRoot {

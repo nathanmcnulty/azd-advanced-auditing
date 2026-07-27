@@ -269,9 +269,9 @@ if ([string]::IsNullOrWhiteSpace($subscriptionId) -or [string]::IsNullOrWhiteSpa
 }
 
 Write-Section -Message 'Installing required local PowerShell modules'
-Ensure-PowerShellModule -Name 'ExchangeOnlineManagement'
+Ensure-PowerShellModule -Name 'ExchangeOnlineManagement' -MinimumVersion '3.10.1'
 
-Import-Module ExchangeOnlineManagement -Force
+Import-Module ExchangeOnlineManagement -MinimumVersion '3.10.1' -Force
 
 Write-Section -Message 'Connecting to Azure, Exchange Online, and Security & Compliance PowerShell'
 Ensure-Command -Name 'az'

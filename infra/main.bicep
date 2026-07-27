@@ -114,7 +114,7 @@ resource packageExchangeOnlineManagement 'Microsoft.Automation/automationAccount
   parent: runtimeEnvironment
   properties: {
     contentLink: {
-      uri: 'https://www.powershellgallery.com/api/v2/package/ExchangeOnlineManagement'
+      uri: 'https://www.powershellgallery.com/api/v2/package/ExchangeOnlineManagement/3.10.1'
     }
   }
 }
