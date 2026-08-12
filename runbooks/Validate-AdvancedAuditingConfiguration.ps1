@@ -4,7 +4,8 @@ param(
   [string]$Organization = '',
 
   [Parameter(Mandatory = $false)]
-  [int]$SampleSize = 10
+  [ValidateRange(0, 1000000)]
+  [int]$SampleSize = 0
 )
 
 Set-StrictMode -Version Latest
@@ -54,21 +55,59 @@ if (-not $exchangeOnlineManagementModule) {
 Import-Module -Name $exchangeOnlineManagementModule.Path -Force
 Write-Output "Using ExchangeOnlineManagement $($exchangeOnlineManagementModule.Version)."
 
-$expectedAdmin = @('MailItemsAccessed', 'Send')
-$expectedDelegate = @('MailItemsAccessed')
-$expectedOwner = @('MailItemsAccessed', 'Send', 'SearchQueryInitiated')
+$expectedAdmin = @(
+  'Update', 'Copy', 'Move', 'MoveToDeletedItems', 'SoftDelete', 'HardDelete', 'FolderBind',
+  'SendAs', 'SendOnBehalf', 'MessageBind', 'Create', 'UpdateFolderPermissions',
+  'AddFolderPermissions', 'ModifyFolderPermissions', 'RemoveFolderPermissions',
+  'UpdateInboxRules', 'UpdateCalendarDelegation', 'RecordDelete', 'ApplyRecord',
+  'MailItemsAccessed', 'UpdateComplianceTag', 'Send', 'AttachmentAccess',
+  'PriorityCleanupDelete', 'ApplyPriorityCleanup', 'PreservedMailItemProactively'
+)
+
+$expectedDelegate = @(
+  'Update', 'Move', 'MoveToDeletedItems', 'SoftDelete', 'HardDelete', 'FolderBind',
+  'SendAs', 'SendOnBehalf', 'Create', 'UpdateFolderPermissions', 'AddFolderPermissions',
+  'ModifyFolderPermissions', 'RemoveFolderPermissions', 'UpdateInboxRules', 'RecordDelete',
+  'ApplyRecord', 'MailItemsAccessed', 'UpdateComplianceTag', 'AttachmentAccess',
+  'PriorityCleanupDelete', 'ApplyPriorityCleanup', 'PreservedMailItemProactively'
+)
+
+$expectedOwner = @(
+  'Update', 'Move', 'MoveToDeletedItems', 'SoftDelete', 'HardDelete', 'Create', 'MailboxLogin',
+  'UpdateFolderPermissions', 'AddFolderPermissions', 'ModifyFolderPermissions',
+  'RemoveFolderPermissions', 'UpdateInboxRules', 'UpdateCalendarDelegation', 'RecordDelete',
+  'ApplyRecord', 'MailItemsAccessed', 'UpdateComplianceTag', 'Send', 'SearchQueryInitiated',
+  'AttachmentAccess', 'PriorityCleanupDelete', 'ApplyPriorityCleanup',
+  'PreservedMailItemProactively'
+)
 
 try {
   Connect-ExchangeOnline -ManagedIdentity -Organization $exchangeOrganization -ShowBanner:$false | Out-Null
 
-  $mailboxes = @(Get-Mailbox -ResultSize $SampleSize -Filter { RecipientType -eq "UserMailbox" -and RecipientTypeDetails -ne "DiscoveryMailbox" })
+  $resultSize = if ($SampleSize -eq 0) { 'Unlimited' } else { $SampleSize }
+  $mailboxes = @(Get-Mailbox -ResultSize $resultSize -Filter { RecipientType -eq "UserMailbox" -and RecipientTypeDetails -ne "DiscoveryMailbox" })
   if ($mailboxes.Count -eq 0) {
     throw 'No user mailboxes were returned during validation.'
   }
 
   $failures = [System.Collections.Generic.List[string]]::new()
 
+  $bypassAssociations = @(Get-MailboxAuditBypassAssociation -ResultSize Unlimited | Where-Object { $_.AuditBypassEnabled -eq $true })
+  foreach ($bypassAssociation in $bypassAssociations) {
+    $bypassIdentity = if ($bypassAssociation.Identity) { [string]$bypassAssociation.Identity } else { [string]$bypassAssociation.Name }
+    $failures.Add("${bypassIdentity}: mailbox audit bypass is enabled")
+  }
+
   foreach ($mailbox in $mailboxes) {
+    if (-not [bool]$mailbox.AuditEnabled) {
+      $failures.Add("$($mailbox.PrimarySmtpAddress): AuditEnabled is false")
+    }
+
+    $auditLogAgeLimit = [timespan]$mailbox.AuditLogAgeLimit
+    if ($auditLogAgeLimit.TotalDays -lt 365) {
+      $failures.Add("$($mailbox.PrimarySmtpAddress): AuditLogAgeLimit is $($auditLogAgeLimit.TotalDays) days, expected at least 365")
+    }
+
     if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditAdmin) -ExpectedValues $expectedAdmin)) {
       $failures.Add("$($mailbox.PrimarySmtpAddress): missing expected AuditAdmin entries")
     }
@@ -86,7 +125,7 @@ try {
     throw ($failures -join [Environment]::NewLine)
   }
 
-  Write-Output "Validated advanced auditing settings on $($mailboxes.Count) user mailboxes."
+  Write-Output "Validated complete advanced auditing settings on $($mailboxes.Count) user mailboxes; no audit bypass associations were enabled."
 }
 finally {
   Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue

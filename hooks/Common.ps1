@@ -150,7 +150,6 @@ function Get-AuditTemplateNames {
     throw 'AZURE_ENV_NAME is not set.'
   }
 
-  $suffix = Get-EnvironmentSuffix -EnvironmentName $environmentName
   $automationSuffix = (($environmentName.Trim().ToLowerInvariant()) -replace '[^a-z0-9]', '')
   if ([string]::IsNullOrWhiteSpace($automationSuffix)) {
     $automationSuffix = 'audit'
@@ -247,6 +246,35 @@ function Publish-AutomationRunbookContent {
     -o none
 }
 
+function Write-AutomationJobStreams {
+  param(
+    [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$ResourceGroupName,
+    [Parameter(Mandatory = $true)][string]$AutomationAccountName,
+    [Parameter(Mandatory = $true)][string]$JobId
+  )
+
+  $streamsUri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/jobs/{3}/streams?api-version=2023-11-01' -f $SubscriptionId, $ResourceGroupName, $AutomationAccountName, $JobId)
+
+  try {
+    $streamResponse = & az rest --method GET --uri $streamsUri --only-show-errors -o json | ConvertFrom-Json
+    foreach ($stream in @($streamResponse.value)) {
+      if ($null -eq $stream) {
+        continue
+      }
+
+      $streamType = if ($stream.properties.streamType) { [string]$stream.properties.streamType } else { 'Stream' }
+      $summary = if ($stream.properties.summary) { [string]$stream.properties.summary } else { '' }
+      if (-not [string]::IsNullOrWhiteSpace($summary)) {
+        Write-Warning ("[{0}] {1}" -f $streamType, $summary)
+      }
+    }
+  }
+  catch {
+    Write-Warning "Could not retrieve output streams for Automation job '$JobId': $($_.Exception.Message)"
+  }
+}
+
 function Wait-AutomationJob {
   param(
     [Parameter(Mandatory = $true)][string]$SubscriptionId,
@@ -282,7 +310,22 @@ function Wait-AutomationJob {
 
     if ($terminalStates -contains $status) {
       if ($status -ne 'Completed') {
-        throw "Automation job '$JobId' finished with status '$status'."
+        Write-AutomationJobStreams `
+          -SubscriptionId $SubscriptionId `
+          -ResourceGroupName $ResourceGroupName `
+          -AutomationAccountName $AutomationAccountName `
+          -JobId $JobId
+
+        $exceptionMessage = ''
+        if ($job.exception) {
+          $exceptionMessage = [string]$job.exception
+        }
+        elseif ($job.properties -and $job.properties.exception) {
+          $exceptionMessage = [string]$job.properties.exception
+        }
+
+        $detail = if ([string]::IsNullOrWhiteSpace($exceptionMessage)) { '' } else { " $exceptionMessage" }
+        throw "Automation job '$JobId' finished with status '$status'.$detail"
       }
 
       return $job
