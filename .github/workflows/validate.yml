@@ -1,0 +1,57 @@
+name: Validate template
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PowerShell dependencies
+        shell: pwsh
+        run: Install-Module Pester, PSScriptAnalyzer -Scope CurrentUser -Force
+
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          $parseErrors = foreach ($file in Get-ChildItem -Recurse -Filter *.ps1) {
+            $tokens = $null
+            $fileErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$fileErrors) | Out-Null
+            $fileErrors
+          }
+          if ($parseErrors) {
+            $parseErrors | Format-List
+            throw 'PowerShell parsing failed.'
+          }
+
+      - name: Analyze PowerShell
+        shell: pwsh
+        run: |
+          $settings = @{
+            Severity = @('Error')
+          }
+          Invoke-ScriptAnalyzer -Path . -Recurse -Settings $settings -EnableExit
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: Invoke-Pester -Path .\tests -CI
+
+      - name: Build Bicep
+        shell: pwsh
+        run: az bicep build --file .\infra\main.bicep --outfile .\infra\main.generated.json --only-show-errors
+
+      - name: Check generated ARM template
+        shell: pwsh
+        run: |
+          $checkedIn = Get-Content .\infra\main.json -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100
+          $generated = Get-Content .\infra\main.generated.json -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100
+          if ($checkedIn -ne $generated) {
+            throw 'infra/main.json is out of date. Rebuild it from infra/main.bicep.'
+          }

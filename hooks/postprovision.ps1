@@ -174,6 +174,7 @@ function Ensure-ExchangeServicePrincipal {
 function Ensure-MailboxAuditingRole {
   $roleName = 'Mailbox Auditing'
   $allowedSetMailboxParameters = @('Identity', 'AuditAdmin', 'AuditDelegate', 'AuditOwner', 'AuditEnabled', 'AuditLogAgeLimit')
+  $allowedCommands = @('Get-Mailbox', 'Get-MailboxAuditBypassAssociation', 'Set-Mailbox')
 
   if (-not (Get-ManagementRole -Identity $roleName -ErrorAction SilentlyContinue)) {
     New-ManagementRole -Name $roleName -Parent 'Audit Logs' | Out-Null
@@ -181,8 +182,14 @@ function Ensure-MailboxAuditingRole {
 
   $entries = @(Get-ManagementRoleEntry "$roleName\*" -ErrorAction Stop)
   foreach ($entry in $entries) {
-    if ($entry.Name -notin @('Get-Mailbox', 'Set-Mailbox')) {
+    if ($entry.Name -notin $allowedCommands) {
       Remove-ManagementRoleEntry -Identity "$roleName\$($entry.Name)" -Confirm:$false | Out-Null
+    }
+  }
+
+  foreach ($commandName in @('Get-Mailbox', 'Get-MailboxAuditBypassAssociation')) {
+    if (-not (Get-ManagementRoleEntry "$roleName\$commandName" -ErrorAction SilentlyContinue)) {
+      Add-ManagementRoleEntry -Identity "$roleName\$commandName" | Out-Null
     }
   }
 
@@ -252,6 +259,29 @@ function Ensure-AuditRetentionPolicy {
       -RetentionDuration 'TwelveMonths' `
       -Priority 10 | Out-Null
   }
+
+  $policy = Get-UnifiedAuditLogRetentionPolicy -Identity $PolicyName -ErrorAction Stop
+  $policyFailures = [System.Collections.Generic.List[string]]::new()
+
+  if ([string]$policy.RetentionDuration -ne 'TwelveMonths') {
+    $policyFailures.Add("RetentionDuration is '$($policy.RetentionDuration)', expected 'TwelveMonths'")
+  }
+
+  if ([int]$policy.Priority -ne 10) {
+    $policyFailures.Add("Priority is '$($policy.Priority)', expected '10'")
+  }
+
+  if (@($policy.RecordTypes).Count -gt 0) {
+    $policyFailures.Add('RecordTypes is restricted; expected all record types')
+  }
+
+  if (@($policy.UserIds).Count -gt 0) {
+    $policyFailures.Add('UserIds is restricted; expected all users')
+  }
+
+  if ($policyFailures.Count -gt 0) {
+    throw "Audit retention policy '$PolicyName' is not configured as expected: $($policyFailures -join '; ')"
+  }
 }
 
 Write-Section -Message 'Loading azd environment values'
@@ -281,11 +311,17 @@ $exchangeOrganization = Get-ExchangeOrganizationDomain -ExistingValue (Get-Value
 Write-Host "Resolved Exchange organization: $exchangeOrganization"
 
 $complianceConnected = Connect-ComplianceForBootstrap -Organization $exchangeOrganization
+$degradedConditions = [System.Collections.Generic.List[string]]::new()
 
 Write-Section -Message 'Configuring audit prerequisites'
 $adminAuditConfig = Get-AdminAuditLogConfig
 if (-not $adminAuditConfig.UnifiedAuditLogIngestionEnabled) {
   Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true
+
+  $adminAuditConfig = Get-AdminAuditLogConfig
+  if (-not $adminAuditConfig.UnifiedAuditLogIngestionEnabled) {
+    throw 'Unified audit log ingestion is still disabled after attempting to enable it.'
+  }
 }
 
 $retentionPolicyName = 'All Records - 1 Year'
@@ -293,7 +329,9 @@ if ($complianceConnected) {
   Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
 }
 else {
-  Write-Warning "Skipping unified audit log retention policy bootstrap because Security & Compliance PowerShell authentication was not available. Configure '$retentionPolicyName' manually if needed."
+  $retentionWarning = "Unified audit log retention policy bootstrap was skipped because Security & Compliance PowerShell authentication was not available. Configure and validate '$retentionPolicyName' manually."
+  $degradedConditions.Add($retentionWarning)
+  Write-Warning $retentionWarning
 }
 
 Write-Section -Message 'Granting managed identity Exchange application access'
@@ -335,24 +373,51 @@ Publish-AutomationRunbookContent `
   -RunbookName $validateConfigurationRunbookName `
   -FilePath (Join-Path -Path $runbooksPath -ChildPath 'Validate-AdvancedAuditingConfiguration.ps1')
 
-Write-Section -Message 'Running advanced auditing remediation runbook'
-Start-AutomationRunbookAndWait `
-  -SubscriptionId $subscriptionId `
-  -ResourceGroupName $resourceGroupName `
-  -AutomationAccountName $automationAccountName `
-  -RunbookName 'Enable-AdvancedAuditing' | Out-Null
-
-Write-Section -Message 'Running validation runbooks'
+Write-Section -Message 'Validating the managed identity connection'
 Start-AutomationRunbookAndWait `
   -SubscriptionId $subscriptionId `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
   -RunbookName $validateConnectionRunbookName | Out-Null
 
-Start-AutomationRunbookAndWait `
-  -SubscriptionId $subscriptionId `
-  -ResourceGroupName $resourceGroupName `
-  -AutomationAccountName $automationAccountName `
-  -RunbookName $validateConfigurationRunbookName | Out-Null
+$runbookFailures = [System.Collections.Generic.List[string]]::new()
 
-Write-Section -Message 'Advanced auditing bootstrap completed'
+Write-Section -Message 'Running advanced auditing remediation runbook'
+try {
+  Start-AutomationRunbookAndWait `
+    -SubscriptionId $subscriptionId `
+    -ResourceGroupName $resourceGroupName `
+    -AutomationAccountName $automationAccountName `
+    -RunbookName 'Enable-AdvancedAuditing' | Out-Null
+}
+catch {
+  $runbookFailures.Add("Advanced auditing remediation failed: $($_.Exception.Message)")
+  Write-Warning $runbookFailures[$runbookFailures.Count - 1]
+}
+
+Write-Section -Message 'Validating advanced auditing configuration'
+try {
+  Start-AutomationRunbookAndWait `
+    -SubscriptionId $subscriptionId `
+    -ResourceGroupName $resourceGroupName `
+    -AutomationAccountName $automationAccountName `
+    -RunbookName $validateConfigurationRunbookName | Out-Null
+}
+catch {
+  $runbookFailures.Add("Advanced auditing validation failed: $($_.Exception.Message)")
+  Write-Warning $runbookFailures[$runbookFailures.Count - 1]
+}
+
+if ($runbookFailures.Count -gt 0) {
+  throw ($runbookFailures -join [Environment]::NewLine)
+}
+
+if ($degradedConditions.Count -gt 0) {
+  Write-Section -Message 'Advanced auditing bootstrap completed with required manual follow-up'
+  foreach ($condition in $degradedConditions) {
+    Write-Warning $condition
+  }
+}
+else {
+  Write-Section -Message 'Advanced auditing bootstrap completed'
+}

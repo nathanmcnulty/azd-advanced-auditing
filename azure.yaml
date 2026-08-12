@@ -16,3 +16,7 @@ hooks:
     shell: pwsh
     run: .\hooks\postprovision.ps1
     interactive: true
+  predown:
+    shell: pwsh
+    run: .\hooks\predown.ps1
+    interactive: false

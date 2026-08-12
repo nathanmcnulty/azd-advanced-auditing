@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "17963539650514223950"
+      "templateHash": "1670855657340737817"
     }
   },
   "parameters": {
@@ -71,7 +71,7 @@
     }
   },
   "variables": {
-    "runtimeEnvironmentName": "PowerShell-74-AdvancedAuditing",
+    "runtimeEnvironmentName": "PowerShell-76-AdvancedAuditing",
     "scheduleName": "advanced-auditing-daily",
     "mainRunbookName": "Enable-AdvancedAuditing",
     "validateConnectionRunbookName": "Validate-ExchangeManagedIdentity",
@@ -129,10 +129,10 @@
       "properties": {
         "runtime": {
           "language": "PowerShell",
-          "version": "7.4"
+          "version": "7.6"
         },
         "defaultPackages": {},
-        "description": "PowerShell 7.4 runtime environment for advanced auditing runbooks"
+        "description": "PowerShell 7.6 runtime environment for advanced auditing runbooks"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"

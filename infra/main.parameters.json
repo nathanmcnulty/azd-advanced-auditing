@@ -4,6 +4,15 @@
   "parameters": {
     "environmentName": {
       "value": "${AZURE_ENV_NAME}"
+    },
+    "automationAccountName": {
+      "value": "${AUTOMATION_ACCOUNT_NAME}"
+    },
+    "deploymentTimestamp": {
+      "value": "${DEPLOYMENT_TIMESTAMP}"
+    },
+    "jobScheduleId": {
+      "value": "${AUTOMATION_JOB_SCHEDULE_ID}"
     }
   }
 }

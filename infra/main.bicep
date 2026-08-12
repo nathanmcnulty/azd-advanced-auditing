@@ -30,7 +30,7 @@ param scheduleStartOffset string = 'PT15M'
 @description('Enable a can-not-delete lock on the Automation account.')
 param enableResourceLock bool = true
 
-var runtimeEnvironmentName = 'PowerShell-74-AdvancedAuditing'
+var runtimeEnvironmentName = 'PowerShell-76-AdvancedAuditing'
 var scheduleName = 'advanced-auditing-daily'
 var mainRunbookName = 'Enable-AdvancedAuditing'
 var validateConnectionRunbookName = 'Validate-ExchangeManagedIdentity'
@@ -82,10 +82,10 @@ resource runtimeEnvironment 'Microsoft.Automation/automationAccounts/runtimeEnvi
   properties: {
     runtime: {
       language: 'PowerShell'
-      version: '7.4'
+      version: '7.6'
     }
     defaultPackages: {}
-    description: 'PowerShell 7.4 runtime environment for advanced auditing runbooks'
+    description: 'PowerShell 7.6 runtime environment for advanced auditing runbooks'
   }
 }
 
