@@ -1,0 +1,338 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "17963539650514223950"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "azd": {
+          "type": "location",
+          "default": "eastus2"
+        },
+        "description": "Deployment location"
+      }
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "dev",
+      "metadata": {
+        "description": "Environment name from azd"
+      }
+    },
+    "automationAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Automation account name. When omitted, the template derives one from the azd environment name."
+      }
+    },
+    "deploymentTimestamp": {
+      "type": "string",
+      "defaultValue": "[utcNow()]",
+      "metadata": {
+        "description": "Deployment timestamp used to calculate a schedule start time in the future"
+      }
+    },
+    "jobScheduleId": {
+      "type": "string",
+      "defaultValue": "[newGuid()]",
+      "metadata": {
+        "description": "Stable GUID for the Automation Account jobSchedule. Managed by preprovision to avoid Azure Automation ghost-state conflicts after resource group deletion."
+      }
+    },
+    "placeholderRunbookUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/nathanmcnulty/nathanmcnulty/master/ExchangeOnline/Enable-AdvancedAuditing.ps1",
+      "metadata": {
+        "description": "PowerShell script used as an initial placeholder until postprovision replaces the runbook content with the local repository version."
+      }
+    },
+    "scheduleStartOffset": {
+      "type": "string",
+      "defaultValue": "PT15M",
+      "metadata": {
+        "description": "Offset applied to the deployment timestamp so the first schedule start lands in the future."
+      }
+    },
+    "enableResourceLock": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable a can-not-delete lock on the Automation account."
+      }
+    }
+  },
+  "variables": {
+    "runtimeEnvironmentName": "PowerShell-74-AdvancedAuditing",
+    "scheduleName": "advanced-auditing-daily",
+    "mainRunbookName": "Enable-AdvancedAuditing",
+    "validateConnectionRunbookName": "Validate-ExchangeManagedIdentity",
+    "validateConfigurationRunbookName": "Validate-AdvancedAuditingConfiguration",
+    "exchangeOrganizationVariableName": "ExchangeOrganization",
+    "retentionPolicyNameVariableName": "AuditRetentionPolicyName",
+    "normalizedEnvironmentName": "[replace(toLower(parameters('environmentName')), '-', '')]",
+    "normalizedEnvironmentNameLength": "[length(variables('normalizedEnvironmentName'))]",
+    "automationNameSuffixStartIndex": "[max(0, sub(variables('normalizedEnvironmentNameLength'), 24))]",
+    "automationNameSuffix": "[if(empty(variables('normalizedEnvironmentName')), 'audit', substring(variables('normalizedEnvironmentName'), variables('automationNameSuffixStartIndex'), sub(variables('normalizedEnvironmentNameLength'), variables('automationNameSuffixStartIndex'))))]",
+    "resolvedAutomationAccountName": "[if(empty(parameters('automationAccountName')), format('aaaudit{0}', variables('automationNameSuffix')), parameters('automationAccountName'))]",
+    "tags": {
+      "workload": "advanced-auditing",
+      "environment": "[toLower(parameters('environmentName'))]",
+      "managedBy": "azd"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Automation/automationAccounts",
+      "apiVersion": "2024-10-23",
+      "name": "[variables('resolvedAutomationAccountName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "sku": {
+          "name": "Basic"
+        },
+        "disableLocalAuth": true,
+        "publicNetworkAccess": true
+      }
+    },
+    {
+      "condition": "[parameters('enableResourceLock')]",
+      "type": "Microsoft.Authorization/locks",
+      "apiVersion": "2020-05-01",
+      "scope": "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]",
+      "name": "lock-cannot-delete-automation",
+      "properties": {
+        "level": "CanNotDelete",
+        "notes": "Prevents accidental deletion of the auditing automation account."
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runtimeEnvironments",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "runtime": {
+          "language": "PowerShell",
+          "version": "7.4"
+        },
+        "defaultPackages": {},
+        "description": "PowerShell 7.4 runtime environment for advanced auditing runbooks"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runtimeEnvironments/packages",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}/{2}', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PowerShellGet')]",
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/PowerShellGet"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runtimeEnvironments/packages",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}/{2}', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PackageManagement')]",
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/PackageManagement"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runtimeEnvironments/packages",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}/{2}', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'ExchangeOnlineManagement')]",
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/ExchangeOnlineManagement/3.10.1"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('exchangeOrganizationVariableName'))]",
+      "properties": {
+        "description": "Tenant initial domain used when connecting to Exchange Online with the automation managed identity.",
+        "isEncrypted": false,
+        "value": "\"\""
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('retentionPolicyNameVariableName'))]",
+      "properties": {
+        "description": "Unified audit log retention policy configured by postprovision.",
+        "isEncrypted": false,
+        "value": "\"All Records - 1 Year\""
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('mainRunbookName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "runbookType": "PowerShell",
+        "logProgress": true,
+        "logVerbose": true,
+        "description": "Ensures mailbox auditing is fully enabled for all user mailboxes.",
+        "publishContentLink": {
+          "uri": "[parameters('placeholderRunbookUri')]",
+          "version": "1.0.0"
+        },
+        "runtimeEnvironment": "[variables('runtimeEnvironmentName')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'ExchangeOnlineManagement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PackageManagement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PowerShellGet')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('validateConnectionRunbookName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "runbookType": "PowerShell",
+        "logProgress": true,
+        "logVerbose": true,
+        "description": "Validates that the automation managed identity can connect to Exchange Online.",
+        "publishContentLink": {
+          "uri": "[parameters('placeholderRunbookUri')]",
+          "version": "1.0.0"
+        },
+        "runtimeEnvironment": "[variables('runtimeEnvironmentName')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'ExchangeOnlineManagement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PackageManagement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PowerShellGet')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('validateConfigurationRunbookName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "runbookType": "PowerShell",
+        "logProgress": true,
+        "logVerbose": true,
+        "description": "Validates that mailbox auditing values match the expected advanced auditing configuration.",
+        "publishContentLink": {
+          "uri": "[parameters('placeholderRunbookUri')]",
+          "version": "1.0.0"
+        },
+        "runtimeEnvironment": "[variables('runtimeEnvironmentName')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'ExchangeOnlineManagement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PackageManagement')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments/packages', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'), 'PowerShellGet')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', variables('resolvedAutomationAccountName'), variables('runtimeEnvironmentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/schedules",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), variables('scheduleName'))]",
+      "properties": {
+        "startTime": "[dateTimeAdd(parameters('deploymentTimestamp'), parameters('scheduleStartOffset'))]",
+        "expiryTime": "2099-12-31T23:59:00Z",
+        "interval": 1,
+        "frequency": "Day",
+        "timeZone": "UTC"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/jobSchedules",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), parameters('jobScheduleId'))]",
+      "properties": {
+        "schedule": {
+          "name": "[variables('scheduleName')]"
+        },
+        "runbook": {
+          "name": "[variables('mainRunbookName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runbooks', variables('resolvedAutomationAccountName'), variables('mainRunbookName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/schedules', variables('resolvedAutomationAccountName'), variables('scheduleName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "AUTOMATION_ACCOUNT_NAME": {
+      "type": "string",
+      "value": "[variables('resolvedAutomationAccountName')]"
+    },
+    "AUTOMATION_PRINCIPAL_ID": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName')), '2024-10-23', 'full').identity.principalId]"
+    },
+    "MAIN_RUNBOOK_NAME": {
+      "type": "string",
+      "value": "[variables('mainRunbookName')]"
+    },
+    "VALIDATE_CONNECTION_RUNBOOK_NAME": {
+      "type": "string",
+      "value": "[variables('validateConnectionRunbookName')]"
+    },
+    "VALIDATE_CONFIGURATION_RUNBOOK_NAME": {
+      "type": "string",
+      "value": "[variables('validateConfigurationRunbookName')]"
+    },
+    "EXCHANGE_ORGANIZATION_VARIABLE_NAME": {
+      "type": "string",
+      "value": "[variables('exchangeOrganizationVariableName')]"
+    }
+  }
+}
