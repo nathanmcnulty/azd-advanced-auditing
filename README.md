@@ -124,6 +124,14 @@ The repository includes Pester tests and a GitHub Actions workflow that:
 - checks remediation and validation action lists remain aligned
 - builds Bicep and verifies `infra\main.json` is current
 
+## azd website catalog metadata
+
+The repository-owned catalog entry is defined in `.azd\catalog.json`. It supplies the curated title, summary, tags, highlights, featured status, solution count, and quickstart commands consumed by [nathanmcnulty/azd-website](https://github.com/nathanmcnulty/azd-website).
+
+When catalog metadata, `azure.yaml`, or this README changes on `main`, `.github\workflows\notify-azd-catalog.yml` sends an `azd-catalog-updated` repository dispatch to the website. The workflow also supports manual runs.
+
+Configure the repository Actions secret `AZD_CATALOG_TOKEN` with a fine-grained personal access token that can access `nathanmcnulty/azd-website` and has **Contents: Read and write** permission. If the secret is absent, the workflow succeeds with a notice and skips the dispatch.
+
 ## Previously validated execution path
 
 The recovered implementation was previously validated end-to-end in a fresh environment named `exec05180009`, which provisioned:

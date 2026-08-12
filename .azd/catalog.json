@@ -1,0 +1,22 @@
+{
+  "title": "Advanced Microsoft 365 auditing",
+  "summary": "Azure Automation runbooks that configure advanced mailbox auditing and retention, bootstrap managed identity permissions, and validate the deployment.",
+  "tags": [
+    "Microsoft 365",
+    "Exchange Online",
+    "Azure Automation",
+    "Managed Identity",
+    "PowerShell"
+  ],
+  "highlights": [
+    "Daily advanced mailbox auditing",
+    "Exchange Online managed identity permission bootstrap",
+    "Validation jobs"
+  ],
+  "featured": true,
+  "solutionCount": 1,
+  "quickstartCommands": [
+    "azd init -t nathanmcnulty/azd-advanced-auditing",
+    "azd up"
+  ]
+}
