@@ -45,7 +45,10 @@ jobs:
 
       - name: Build Bicep
         shell: pwsh
-        run:         az bicep build --file ./infra/main.bicep --outfile ./infra/main.generated.json --only-show-errors
+        run: |
+          az config set bicep.use_binary_from_path=false
+          az bicep install --version v0.42.1
+          az bicep build --file ./infra/main.bicep --outfile ./infra/main.generated.json --only-show-errors
 
       - name: Check generated ARM template
         shell: pwsh
