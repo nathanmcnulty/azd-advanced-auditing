@@ -13,8 +13,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: catalog-notification-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   notify:
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     env:
       AZD_CATALOG_TOKEN: ${{ secrets.AZD_CATALOG_TOKEN }}
