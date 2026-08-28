@@ -7,6 +7,19 @@
 
 The template provisions an Azure Automation account, creates a PowerShell 7.6 runtime environment, publishes runbooks for advanced mailbox auditing, bootstraps the required Exchange Online permissions for the automation managed identity, and runs validation jobs after provisioning.
 
+> [!WARNING]
+> This deployment changes tenant-wide audit ingestion, retention, Exchange permissions, and mailbox auditing. Review the requested roles and Graph permissions before running it. The current supported-platform end-to-end retest is still pending; see [ExchangeOnlineManagement retest status](#exchangeonlinemanagement-retest-status).
+
+## Quickstart
+
+Install Azure CLI, Azure Developer CLI, and PowerShell 7, then authenticate with an administrator who has the Exchange and Microsoft Graph permissions listed below:
+
+```powershell
+azd init -t nathanmcnulty/azd-advanced-auditing && azd up
+```
+
+The interactive hooks reuse normal cached or browser authentication. Review the output and validation results before relying on the scheduled runbook. `azd down` removes the Azure deployment after the template removes its Automation delete lock; tenant audit settings and Exchange role objects are not automatically reverted.
+
 ## What this template deploys
 
 `azd provision` creates and configures:
