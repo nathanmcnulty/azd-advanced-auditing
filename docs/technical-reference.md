@@ -14,11 +14,13 @@ The Bicep layer initially publishes placeholder runbook content so ARM can creat
 
 ## Permissions
 
-The operator needs an Azure subscription where they can create Automation resources, Exchange authority to create the role, role group, service-principal link, and audit retention policy, and Graph consent for:
+The Azure/Exchange operator needs an Azure subscription where they can create Automation resources, Exchange authority to create the role, role group, service-principal link, and audit retention policy, and a Graph session with delegated consent for:
 
 - `Application.Read.All`;
 - `AppRoleAssignment.ReadWrite.All`;
 - `Domain.Read.All`.
+
+These delegated Graph permissions are a separate consent boundary. Security Administrator, Exchange Administrator, and Azure RBAC do not grant Graph consent. Route Microsoft Graph API consent for the deployment client to a **Global Administrator or Privileged Role Administrator**, then run the hook with a context that contains the scopes above. If that context is not available, Azure infrastructure may be created while publication, Exchange linking, remediation, or validation remains incomplete.
 
 The runtime managed identity receives the limited Exchange authority required by the runbooks. Failed jobs print their available output streams and exception details before provisioning exits.
 

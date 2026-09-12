@@ -14,7 +14,7 @@ This template helps an administrator:
 
 ## Quickstart
 
-Install [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Azure CLI, and PowerShell 7. Use an administrator who can deploy Azure Automation, consent to the required Graph permissions, and configure Exchange and Purview auditing.
+Install [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Azure CLI, and PowerShell 7. Use an operator who can deploy Azure Automation, configure Exchange and Purview auditing, and perform the required Azure/Exchange assignments. Some environments already have the required Microsoft Graph permissions consented. If Graph consent has not been completed previously, the deployment may require a **Global Administrator or Privileged Role Administrator**.
 
 From a new empty directory, run:
 
@@ -41,7 +41,7 @@ The Azure deployment creates an Automation account, a PowerShell 7.6 runtime, th
 
 ## Permissions and behavior
 
-The administrator needs Azure deployment and role-assignment authority, Exchange access sufficient to create the service-principal link and limited management role, and delegated Graph consent for `Application.Read.All`, `AppRoleAssignment.ReadWrite.All`, and `Domain.Read.All`.
+The feature operator needs Azure deployment and role-assignment authority plus Exchange access sufficient to create the service-principal link and limited management role. Some environments already have the required Microsoft Graph permissions consented. If Graph consent has not been completed previously, the deployment may require a **Global Administrator or Privileged Role Administrator**. See [technical reference](docs/technical-reference.md) for the exact permissions and hook behavior.
 
 If Security & Compliance PowerShell authentication is unavailable, the deployment reports a degraded warning and identifies the retention policy that requires manual completion. Mailbox remediation or validation failures remain fatal.
 
