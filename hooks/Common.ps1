@@ -119,6 +119,9 @@ function Set-AzdEnvironmentValue {
 
   Ensure-Command -Name 'azd'
   & azd env set $Name $Value --no-prompt | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not persist azd environment value '$Name'."
+  }
   [System.Environment]::SetEnvironmentVariable($Name, $Value)
 }
 

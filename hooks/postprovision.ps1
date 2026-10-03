@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path -Path $PSScriptRoot -ChildPath 'Common.ps1')
+. (Join-Path -Path $PSScriptRoot -ChildPath 'JobScheduleOwnership.ps1')
 
 function Invoke-GraphRest {
   param(
@@ -55,14 +56,19 @@ function Get-AzCliUserPrincipalName {
 
 function Connect-ExchangeForBootstrap {
   $upn = Get-AzCliUserPrincipalName
-  $outlookToken = Get-AzCliAccessToken -ResourceUrl 'https://outlook.office365.com'
 
   try {
+    $outlookToken = Get-AzCliAccessToken -ResourceUrl 'https://outlook.office365.com'
     Connect-ExchangeOnline -AccessToken $outlookToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
   }
   catch {
-    Write-Warning "Exchange Online access-token auth failed. Falling back to device auth. Error: $($_.Exception.Message)"
-    Connect-ExchangeOnline -ShowBanner:$false -Device | Out-Null
+    Write-Warning "Exchange Online access-token auth was unavailable. Trying the normal cached account or browser sign-in for '$upn'."
+    try {
+      Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false | Out-Null
+    }
+    catch {
+      throw "Exchange Online cached or browser sign-in for '$upn' could not complete. Review the selected account and interactive authentication state."
+    }
   }
 }
 
@@ -293,10 +299,25 @@ $managedIdentityObjectId = Get-ValueFromEnvironment -Name 'AUTOMATION_PRINCIPAL_
 $validateConnectionRunbookName = Get-ValueFromEnvironment -Name 'VALIDATE_CONNECTION_RUNBOOK_NAME' -AzdValues $azdValues
 $validateConfigurationRunbookName = Get-ValueFromEnvironment -Name 'VALIDATE_CONFIGURATION_RUNBOOK_NAME' -AzdValues $azdValues
 $exchangeOrganizationVariableName = Get-ValueFromEnvironment -Name 'EXCHANGE_ORGANIZATION_VARIABLE_NAME' -AzdValues $azdValues
+$jobScheduleId = Get-ValueFromEnvironment -Name 'AUTOMATION_JOB_SCHEDULE_ID' -AzdValues $azdValues
 
-if ([string]::IsNullOrWhiteSpace($subscriptionId) -or [string]::IsNullOrWhiteSpace($resourceGroupName) -or [string]::IsNullOrWhiteSpace($automationAccountName) -or [string]::IsNullOrWhiteSpace($managedIdentityObjectId)) {
+if ([string]::IsNullOrWhiteSpace($subscriptionId) -or [string]::IsNullOrWhiteSpace($resourceGroupName) -or [string]::IsNullOrWhiteSpace($automationAccountName) -or [string]::IsNullOrWhiteSpace($managedIdentityObjectId) -or [string]::IsNullOrWhiteSpace($jobScheduleId)) {
   throw 'Required azd environment values were not found after provision.'
 }
+
+Write-Section -Message 'Recording provisioned Automation ownership'
+Ensure-Command -Name 'az'
+$accountId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $subscriptionId, $resourceGroupName, $automationAccountName
+$accountJson = & az automation account show --subscription $subscriptionId --resource-group $resourceGroupName --name $automationAccountName --only-show-errors -o json
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) { throw 'Could not verify the provisioned Automation account.' }
+$jobScheduleUri = 'https://management.azure.com{0}/jobSchedules/{1}?api-version=2023-11-01' -f $accountId, $jobScheduleId
+$jobScheduleJson = & az rest --method GET --uri $jobScheduleUri --only-show-errors -o json
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($jobScheduleJson)) { throw 'Could not verify the provisioned Automation jobSchedule.' }
+Assert-AuditOwnershipReceiptTarget -ExpectedAccountId $accountId -ExpectedPrincipalId $managedIdentityObjectId -ExpectedJobScheduleId $jobScheduleId `
+  -Account ($accountJson | ConvertFrom-Json -ErrorAction Stop) -JobSchedule ($jobScheduleJson | ConvertFrom-Json -ErrorAction Stop)
+Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_ACCOUNT_ID' -Value $accountId
+Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_PRINCIPAL_ID' -Value $managedIdentityObjectId
+Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_JOB_SCHEDULE_ID' -Value $jobScheduleId
 
 Write-Section -Message 'Installing required local PowerShell modules'
 Ensure-PowerShellModule -Name 'ExchangeOnlineManagement' -MinimumVersion '3.10.1'
