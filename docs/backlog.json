@@ -1,0 +1,141 @@
+{
+  "schemaVersion": "1.0.0",
+  "repository": "nathanmcnulty/azd-advanced-auditing",
+  "sourceRevision": "4239ee03edf452aefcffb273ee1c554408e25452",
+  "capturedAt": "2026-10-03",
+  "items": [
+    {
+      "id": "AUD-001",
+      "title": "Reconcile this backlog with current source and active work",
+      "kind": "discovery",
+      "priority": "P1",
+      "status": "ready",
+      "wave": 0,
+      "problem": "Plans and implementation evidence are spread across files; the captured source can change while other tasks work.",
+      "scope": [
+        "docs/backlog.json",
+        "docs/backlog.md",
+        "Existing roadmap, execution status, open issues and pull requests (read-only)"
+      ],
+      "acceptance": [
+        "Classify each candidate as implemented, still open, superseded or awaiting evidence; retain source links and reasons.",
+        "Inspect dirty state, remotes, worktrees and local environment presence without reading secrets; avoid duplicate work with active owners.",
+        "Resolve the actual offline validation commands and record exact current default-branch/working-tree provenance; do not copy historical live passes to newer code."
+      ],
+      "validation": [
+        "git status --short",
+        "git remote -v",
+        "git worktree list --porcelain",
+        "Read the applicable instructions and validation workflow; read gh issue list and gh pr list for the named repository using nathanmcnulty. Do not create or modify issues/PRs."
+      ],
+      "dependencies": [],
+      "authorization": "local-only",
+      "components": [],
+      "sources": [
+        "README.md"
+      ],
+      "evidence": [],
+      "blocker": null
+    },
+    {
+      "id": "AUD-002",
+      "title": "Prepare and execute the supported Exchange/Purview compatibility retest",
+      "kind": "verification",
+      "priority": "P1",
+      "status": "proposed",
+      "wave": 2,
+      "problem": "The documented PowerShell 7.6 / ExchangeOnlineManagement 3.10.1 retest remains a production-readiness gap.",
+      "scope": [
+        "docs/technical-reference.md",
+        "docs/validation.md",
+        "scripts/",
+        "runbooks/"
+      ],
+      "acceptance": [
+        "Record operator and managed-identity outcomes for audit ingestion, retention, mailbox audit actions and bypass checks.",
+        "Distinguish unavailable Purview retention setup from fatal mailbox remediation failure.",
+        "Preserve previous settings and prove rollback; never mark local syntax checks as live Exchange success."
+      ],
+      "validation": [
+        "Use the offline commands in the registered validation workflow; record the exact commands, revision and results before implementation is complete.",
+        "Run focused tests for changed behavior from tests/; fixtures do not prove live-service or endpoint behavior.",
+        "After separate authorization, retain redacted exact-target live evidence and cleanup results outside public Git. Do not execute live operations from this backlog alone."
+      ],
+      "dependencies": [],
+      "authorization": "tenant-write",
+      "components": [],
+      "sources": [
+        "README.md",
+        "docs/technical-reference.md",
+        "https://github.com/nathanmcnulty/azd-advanced-auditing/issues/1"
+      ],
+      "evidence": [],
+      "blocker": null
+    },
+    {
+      "id": "AUD-003",
+      "title": "Add bounded deployment-validation and optional operational alerting",
+      "kind": "feature",
+      "priority": "P2",
+      "status": "proposed",
+      "wave": 2,
+      "problem": "Automation output should separate configured resources, job failures, degraded retention and actual audit state.",
+      "scope": [
+        "scripts/",
+        "infra/",
+        "docs/",
+        "azd-components.lock.json",
+        "azd-permissions.json"
+      ],
+      "acceptance": [
+        "Compare existing validation with deployment-validation and adopt only where it preserves the audit-specific checks.",
+        "Optional Azure Monitor alerts expose job failures and degraded state while KQL and remediation remain solution-owned.",
+        "Disabled alerts add no resource or permission delta; new component copies are immutable and hash-locked."
+      ],
+      "validation": [
+        "Use the offline commands in the registered validation workflow; record the exact commands, revision and results before implementation is complete.",
+        "Run focused tests for changed behavior from tests/; fixtures do not prove live-service or endpoint behavior."
+      ],
+      "dependencies": [],
+      "authorization": "local-only",
+      "components": [
+        "deployment-validation",
+        "azure-monitor-scheduled-query-notifications"
+      ],
+      "sources": [
+        "README.md"
+      ],
+      "evidence": [],
+      "blocker": null
+    },
+    {
+      "id": "AUD-004",
+      "title": "Preprovision deletes all Automation job schedules without proving template ownership",
+      "kind": "discovery",
+      "priority": "P1",
+      "status": "proposed",
+      "wave": 0,
+      "problem": "Open report captured 2026-10-03 during execution reconciliation. Another code-quality task may own an active fix; inspect its PR and current source before dispatch.",
+      "scope": [
+        "Linked issue and current source (read-only)",
+        "Repository-local backlog evidence"
+      ],
+      "acceptance": [
+        "Read the linked issue and current default branch; classify the exact defect, current owner and evidence gap.",
+        "Record a current PR or verified resolution before selecting any implementation; preserve broader feature and live acceptance gates."
+      ],
+      "validation": [
+        "Read current issue and PR state using nathanmcnulty; do not modify or close issues during reconciliation.",
+        "Inspect dirty state and worktrees; resolve the exact current revision and relevant offline commands before implementation."
+      ],
+      "dependencies": [],
+      "authorization": "local-only",
+      "components": [],
+      "sources": [
+        "https://github.com/nathanmcnulty/azd-advanced-auditing/issues/13"
+      ],
+      "evidence": [],
+      "blocker": null
+    }
+  ]
+}
