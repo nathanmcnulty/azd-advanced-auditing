@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path -Path $PSScriptRoot -ChildPath 'Common.ps1')
+. (Join-Path -Path $PSScriptRoot -ChildPath 'JobScheduleOwnership.ps1')
 
 Write-Section -Message 'Preparing azd environment values'
 Ensure-Command -Name 'az'
@@ -20,76 +21,46 @@ Set-AzdEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp
 $subscriptionId = [System.Environment]::GetEnvironmentVariable('AZURE_SUBSCRIPTION_ID')
 $resourceGroupName = $names.ResourceGroupName
 $automationAccountName = $names.AutomationAccountName
-$storedJobScheduleId = [System.Environment]::GetEnvironmentVariable('AUTOMATION_JOB_SCHEDULE_ID')
-$jobScheduleId = [System.Guid]::NewGuid().ToString()
+$azdValues = Get-AzdEnvironmentValues
+if ([string]::IsNullOrWhiteSpace($subscriptionId)) { throw 'AZURE_SUBSCRIPTION_ID is required.' }
+$expectedAccountId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $subscriptionId, $resourceGroupName, $automationAccountName)
 
 Write-Section -Message 'Managing Automation jobSchedule state'
 
-try {
-  $automationAccountExists = $false
-  $showJson = & az automation account show `
-    --subscription $subscriptionId `
-    --resource-group $resourceGroupName `
-    --name $automationAccountName `
-    --only-show-errors `
-    -o json 2>$null
+$groupExists = & az group exists --subscription $subscriptionId --name $resourceGroupName --only-show-errors -o tsv
+if ($LASTEXITCODE -ne 0 -or $groupExists -notin @('true', 'false')) { throw 'Could not determine whether the target resource group exists.' }
 
-  if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($showJson)) {
-    $automationAccountExists = $true
-  }
-
-  if ($automationAccountExists) {
-    Write-Host 'Automation account exists. Removing lock and deleting live jobSchedules before redeploying.'
-
-    $lockId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/providers/Microsoft.Authorization/locks/lock-cannot-delete-automation' -f $subscriptionId, $resourceGroupName, $automationAccountName)
-    & az lock delete --ids $lockId --subscription $subscriptionId --only-show-errors 2>$null | Out-Null
-
-    $listUri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/jobSchedules?api-version=2023-11-01' -f $subscriptionId, $resourceGroupName, $automationAccountName)
-    $listJson = & az rest --method GET --uri $listUri --only-show-errors -o json 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($listJson)) {
-      $jobSchedules = @(($listJson | ConvertFrom-Json).value)
-      foreach ($jobSchedule in $jobSchedules) {
-        if ($null -eq $jobSchedule) {
-          continue
-        }
-
-        $jobScheduleIdToDelete = ''
-        if ($jobSchedule.properties -and $jobSchedule.properties.jobScheduleId) {
-          $jobScheduleIdToDelete = [string]$jobSchedule.properties.jobScheduleId
-        }
-        elseif ($jobSchedule.name) {
-          $jobScheduleIdToDelete = [string]$jobSchedule.name
-        }
-        elseif ($jobSchedule.id) {
-          $jobScheduleIdToDelete = [string]($jobSchedule.id -split '/')[-1]
-        }
-
-        if ([string]::IsNullOrWhiteSpace($jobScheduleIdToDelete)) {
-          continue
-        }
-
-        Write-Host "  Deleting live jobSchedule '$jobScheduleIdToDelete'"
-
-        $deleteUri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/jobSchedules/{3}?api-version=2023-11-01' -f $subscriptionId, $resourceGroupName, $automationAccountName, $jobScheduleIdToDelete)
-        & az rest --method DELETE --uri $deleteUri --only-show-errors 2>$null | Out-Null
-      }
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($storedJobScheduleId)) {
-      $jobScheduleId = $storedJobScheduleId
-      Write-Host "  Reusing stored jobSchedule GUID: $jobScheduleId"
-    }
-    else {
-      Write-Host "  Generated new jobSchedule GUID: $jobScheduleId"
-    }
-  }
-  else {
-    Write-Host "Automation account not found. Generated fresh jobSchedule GUID: $jobScheduleId"
+$account = $null
+$jobSchedules = @()
+if ($groupExists -eq 'true') {
+  $accountsJson = & az automation account list --subscription $subscriptionId --resource-group $resourceGroupName --only-show-errors -o json
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountsJson)) { throw 'Could not list Automation accounts in the target resource group.' }
+  $accounts = @($accountsJson | ConvertFrom-Json -ErrorAction Stop)
+  $matchingAccounts = @($accounts | Where-Object { [string]$_.name -ieq $automationAccountName })
+  if ($matchingAccounts.Count -gt 1) { throw 'Automation account discovery returned duplicate target names.' }
+  if ($matchingAccounts.Count -eq 1) {
+    $accountJson = & az automation account show --subscription $subscriptionId --resource-group $resourceGroupName --name $automationAccountName --only-show-errors -o json
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) { throw 'Could not inspect the existing Automation account.' }
+    $account = $accountJson | ConvertFrom-Json -ErrorAction Stop
+    $listUri = 'https://management.azure.com{0}/jobSchedules?api-version=2023-11-01' -f $expectedAccountId
+    $listJson = & az rest --method GET --uri $listUri --only-show-errors -o json
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($listJson)) { throw 'Could not inspect live Automation jobSchedules.' }
+    $listResponse = $listJson | ConvertFrom-Json -ErrorAction Stop
+    if ($listResponse.PSObject.Properties.Match('value').Count -eq 0 -or $null -eq $listResponse.value) { throw 'Automation jobSchedule listing had no value array.' }
+    if ($listResponse.PSObject.Properties.Match('nextLink').Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$listResponse.nextLink)) { throw 'Automation jobSchedule listing was incomplete; refusing to redeploy.' }
+    $jobSchedules = @($listResponse.value)
   }
 }
-catch {
-  Write-Warning "Could not fully manage jobSchedule state: $($_.Exception.Message)"
-  Write-Host "Using fallback jobSchedule GUID: $jobScheduleId"
-}
 
-Set-AzdEnvironmentValue -Name 'AUTOMATION_JOB_SCHEDULE_ID' -Value $jobScheduleId
+$ownership = Resolve-AuditJobScheduleOwnership -ExpectedAccountId $expectedAccountId -Account $account -JobSchedules $jobSchedules `
+  -ReceiptAccountId (Get-ValueFromEnvironment -Name 'AUTOMATION_OWNED_ACCOUNT_ID' -AzdValues $azdValues) `
+  -ReceiptPrincipalId (Get-ValueFromEnvironment -Name 'AUTOMATION_OWNED_PRINCIPAL_ID' -AzdValues $azdValues) `
+  -ReceiptJobScheduleId (Get-ValueFromEnvironment -Name 'AUTOMATION_OWNED_JOB_SCHEDULE_ID' -AzdValues $azdValues) `
+  -AdoptAccountId (Get-ValueFromEnvironment -Name 'AUTOMATION_ADOPT_ACCOUNT_ID' -AzdValues $azdValues) `
+  -AdoptPrincipalId (Get-ValueFromEnvironment -Name 'AUTOMATION_ADOPT_PRINCIPAL_ID' -AzdValues $azdValues) `
+  -AdoptJobScheduleId (Get-ValueFromEnvironment -Name 'AUTOMATION_ADOPT_JOB_SCHEDULE_ID' -AzdValues $azdValues)
+
+if (-not [string]::IsNullOrWhiteSpace($ownership.OwnedJobScheduleId)) {
+  Write-Host "Existing template jobSchedule '$($ownership.OwnedJobScheduleId)' verified. Its linkage remains intact while ARM redeploys."
+}
+Set-AzdEnvironmentValue -Name 'AUTOMATION_JOB_SCHEDULE_ID' -Value $ownership.JobScheduleId
