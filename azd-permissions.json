@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "1.0",
+  "solutionId": "azd-advanced-auditing",
+  "status": "implemented",
+  "coverage": "partial",
+  "reviewedOn": "2026-10-02",
+  "requirements": [
+    {
+      "resource": "https://graph.microsoft.com",
+      "kind": "delegated",
+      "permission": "Application.Read.All",
+      "principal": "deployment-operator",
+      "phase": "deployment",
+      "feature": "core",
+      "defaultEnabled": true,
+      "scope": "tenant",
+      "rationale": "Required by the recorded project capability.",
+      "evidenceState": "documented",
+      "evidence": [
+        {
+          "path": "docs/technical-reference.md",
+          "sha256": "970a7d55d7e9c7a594b850702a5639ad93caaf2a989a83255f8b5978cec52ecc"
+        }
+      ]
+    },
+    {
+      "resource": "https://graph.microsoft.com",
+      "kind": "delegated",
+      "permission": "AppRoleAssignment.ReadWrite.All",
+      "principal": "deployment-operator",
+      "phase": "deployment",
+      "feature": "core",
+      "defaultEnabled": true,
+      "scope": "tenant",
+      "rationale": "Required by the recorded project capability.",
+      "evidenceState": "documented",
+      "evidence": [
+        {
+          "path": "docs/technical-reference.md",
+          "sha256": "970a7d55d7e9c7a594b850702a5639ad93caaf2a989a83255f8b5978cec52ecc"
+        }
+      ]
+    },
+    {
+      "resource": "https://graph.microsoft.com",
+      "kind": "delegated",
+      "permission": "Domain.Read.All",
+      "principal": "deployment-operator",
+      "phase": "deployment",
+      "feature": "core",
+      "defaultEnabled": true,
+      "scope": "tenant",
+      "rationale": "Required by the recorded project capability.",
+      "evidenceState": "documented",
+      "evidence": [
+        {
+          "path": "docs/technical-reference.md",
+          "sha256": "970a7d55d7e9c7a594b850702a5639ad93caaf2a989a83255f8b5978cec52ecc"
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    "Azure RBAC scopes, operator/consent roles, cleanup, and optional connector permissions still need a full review.",
+    "Exchange runtime application/RBAC authority and Purview operation roles require review."
+  ]
+}
