@@ -54,3 +54,48 @@ Describe 'Advanced auditing template' {
     }
   }
 }
+
+Describe 'Automation runbook publication' {
+  BeforeAll {
+    $commonPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1'
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($commonPath, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+    $publisher = $ast.Find({
+      param($node)
+      $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Publish-AutomationRunbookContent'
+    }, $true)
+    if (-not $publisher) { throw 'Runbook publisher was not found.' }
+    $publisherDefinition = [scriptblock]::Create($publisher.Extent.Text)
+  }
+
+  It 'stops after <Name> fails' -ForEach @(
+    @{ Name = 'show'; ExpectedCalls = 1; ErrorText = 'inspect' }
+    @{ Name = 'replace-content'; ExpectedCalls = 2; ErrorText = 'replace content' }
+    @{ Name = 'publish'; ExpectedCalls = 3; ErrorText = 'publish' }
+  ) {
+    & {
+      . $publisherDefinition
+      $filePath = Join-Path $TestDrive 'runbook.ps1'
+      Set-Content -LiteralPath $filePath -Value 'Write-Output "fixture"'
+      $script:publisherCalls = [System.Collections.Generic.List[string]]::new()
+      $failedCommand = $Name
+      function az {
+        $commandName = [string]$args[2]
+        $script:publisherCalls.Add($commandName)
+        $global:LASTEXITCODE = if ($commandName -eq $failedCommand) { 7 } else { 0 }
+      }
+      try {
+        {
+          Publish-AutomationRunbookContent -SubscriptionId 'test-subscription' -ResourceGroupName 'test-group' `
+            -AutomationAccountName 'test-automation' -RunbookName 'test-runbook' -FilePath $filePath
+        } | Should -Throw "*$ErrorText*"
+        $script:publisherCalls.Count | Should -Be $ExpectedCalls
+      }
+      finally {
+        $global:LASTEXITCODE = 0
+      }
+    }
+  }
+}
