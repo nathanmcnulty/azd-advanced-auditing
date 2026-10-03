@@ -227,6 +227,9 @@ function Publish-AutomationRunbookContent {
     --name $RunbookName `
     --only-show-errors `
     -o none
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect Automation runbook '$RunbookName' before publishing."
+  }
 
   & az automation runbook replace-content `
     --subscription $SubscriptionId `
@@ -236,6 +239,9 @@ function Publish-AutomationRunbookContent {
     --content "@$FilePath" `
     --only-show-errors `
     -o none
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not replace content for Automation runbook '$RunbookName'."
+  }
 
   & az automation runbook publish `
     --subscription $SubscriptionId `
@@ -244,6 +250,9 @@ function Publish-AutomationRunbookContent {
     --name $RunbookName `
     --only-show-errors `
     -o none
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not publish Automation runbook '$RunbookName'."
+  }
 }
 
 function Write-AutomationJobStreams {
