@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.42.1.51946",
-      "templateHash": "1670855657340737817"
+      "version": "0.46.1.21595",
+      "templateHash": "10844721282064496838"
     }
   },
   "parameters": {
@@ -68,9 +68,39 @@
       "metadata": {
         "description": "Enable a can-not-delete lock on the Automation account."
       }
+    },
+    "operationalAlertsEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional operational telemetry and alerts. No resources are added when false."
+      }
+    },
+    "operationalWorkspaceResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Log Analytics workspace ARM ID selected by the owner; required only for operational alerts."
+      }
+    },
+    "operationalWorkspaceLocation": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Region of the existing workspace, which may differ from the Automation account region."
+      }
+    },
+    "operationalActionGroupResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing action group ARM ID. Recipient configuration remains owner-controlled."
+      }
     }
   },
   "variables": {
+    "$fxv#0": "AzureDiagnostics\n| where ResourceProvider == \"MICROSOFT.AUTOMATION\" and Category == \"JobLogs\"\n| where _ResourceId =~ \"__AUTOMATION_ACCOUNT_ID__\"\n| where ResultType in (\"Failed\", \"Stopped\", \"Suspended\")\n| project TimeGenerated, RunbookName_s, JobId_g, ResultType, _ResourceId\n",
+    "$fxv#1": "AzureDiagnostics\n| where ResourceProvider == \"MICROSOFT.AUTOMATION\" and Category == \"JobStreams\" and StreamType_s == \"Output\"\n| where _ResourceId =~ \"__AUTOMATION_ACCOUNT_ID__\" and RunbookName_s == \"Enable-AdvancedAuditing\"\n| extend signal = parse_json(ResultDescription)\n| where tostring(signal.kind) == \"advancedAuditing.retentionSetup\" and tostring(signal.schemaVersion) == \"1.0\"\n| extend status = iff(isnotempty(tostring(signal.accountId)) and tolower(tostring(signal.accountId)) == tolower(_ResourceId), tostring(signal.status), \"unknown\")\n| where status in (\"degraded\", \"stale\", \"unknown\")\n| project TimeGenerated, RunbookName_s, JobId_g, status, _ResourceId\n",
     "runtimeEnvironmentName": "PowerShell-76-AdvancedAuditing",
     "scheduleName": "advanced-auditing-daily",
     "mainRunbookName": "Enable-AdvancedAuditing",
@@ -307,6 +337,455 @@
         "[resourceId('Microsoft.Automation/automationAccounts/runbooks', variables('resolvedAutomationAccountName'), variables('mainRunbookName'))]",
         "[resourceId('Microsoft.Automation/automationAccounts/schedules', variables('resolvedAutomationAccountName'), variables('scheduleName'))]"
       ]
+    },
+    {
+      "condition": "[parameters('operationalAlertsEnabled')]",
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('resolvedAutomationAccountName'), 'AuditRetentionSetupState')]",
+      "properties": {
+        "description": "Bounded bootstrap retention-setup observation, not effective Purview state.",
+        "isEncrypted": false,
+        "value": "\"\""
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('operationalAlertsEnabled')]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]",
+      "name": "advanced-auditing-operational",
+      "properties": {
+        "workspaceId": "[parameters('operationalWorkspaceResourceId')]",
+        "logs": [
+          {
+            "category": "JobLogs",
+            "enabled": true
+          },
+          {
+            "category": "JobStreams",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('operationalAlertsEnabled')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "advanced-auditing-failed-jobs",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "alertRuleName": {
+            "value": "[format('{0}-failed-jobs', variables('resolvedAutomationAccountName'))]"
+          },
+          "location": {
+            "value": "[parameters('operationalWorkspaceLocation')]"
+          },
+          "workspaceResourceId": {
+            "value": "[parameters('operationalWorkspaceResourceId')]"
+          },
+          "actionGroupResourceId": {
+            "value": "[parameters('operationalActionGroupResourceId')]"
+          },
+          "displayName": {
+            "value": "Advanced auditing failed jobs"
+          },
+          "alertDescription": {
+            "value": "Investigate failed, suspended or stopped jobs; no remediation is automatic."
+          },
+          "query": {
+            "value": "[replace(variables('$fxv#0'), '__AUTOMATION_ACCOUNT_ID__', resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName')))]"
+          },
+          "windowSize": {
+            "value": "PT10M"
+          },
+          "autoMitigate": {
+            "value": false
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "8590852337594758615"
+            }
+          },
+          "parameters": {
+            "alertRuleName": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Name of the Azure Monitor scheduled-query rule."
+              }
+            },
+            "location": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Azure region of the target Log Analytics workspace."
+              }
+            },
+            "workspaceResourceId": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource ID of the target Log Analytics workspace."
+              }
+            },
+            "actionGroupResourceId": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource ID of the action group invoked when the rule fires."
+              }
+            },
+            "displayName": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Display name shown for the scheduled-query rule."
+              }
+            },
+            "alertDescription": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Solution-owned description of the alert behavior."
+              }
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Solution-owned KQL query evaluated by the rule."
+              }
+            },
+            "severity": {
+              "type": "int",
+              "defaultValue": 2,
+              "minValue": 0,
+              "maxValue": 4,
+              "metadata": {
+                "description": "Alert severity from 0 (critical) through 4 (verbose)."
+              }
+            },
+            "evaluationFrequency": {
+              "type": "string",
+              "defaultValue": "PT5M",
+              "allowedValues": [
+                "PT5M"
+              ],
+              "metadata": {
+                "description": "ISO 8601 interval controlling how often the query is evaluated."
+              }
+            },
+            "windowSize": {
+              "type": "string",
+              "defaultValue": "PT5M",
+              "allowedValues": [
+                "PT5M",
+                "PT10M"
+              ],
+              "metadata": {
+                "description": "ISO 8601 interval controlling the query lookback window."
+              }
+            },
+            "autoMitigate": {
+              "type": "bool",
+              "metadata": {
+                "description": "Whether Azure Monitor automatically resolves a fired alert after the condition clears."
+              }
+            },
+            "dimensions": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Solution-owned dimensions emitted by the query and used to split alert instances."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Resource tags applied to the scheduled-query rule."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('alertRuleName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "[parameters('displayName')]",
+                "description": "[parameters('alertDescription')]",
+                "severity": "[parameters('severity')]",
+                "enabled": true,
+                "evaluationFrequency": "[parameters('evaluationFrequency')]",
+                "windowSize": "[parameters('windowSize')]",
+                "scopes": [
+                  "[parameters('workspaceResourceId')]"
+                ],
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "[parameters('query')]",
+                      "timeAggregation": "Count",
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      },
+                      "dimensions": "[parameters('dimensions')]"
+                    }
+                  ]
+                },
+                "autoMitigate": "[parameters('autoMitigate')]",
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupResourceId')]"
+                  ]
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "alertRuleResourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/scheduledQueryRules', parameters('alertRuleName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('operationalAlertsEnabled')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "advanced-auditing-retention-setup",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "alertRuleName": {
+            "value": "[format('{0}-retention-setup', variables('resolvedAutomationAccountName'))]"
+          },
+          "location": {
+            "value": "[parameters('operationalWorkspaceLocation')]"
+          },
+          "workspaceResourceId": {
+            "value": "[parameters('operationalWorkspaceResourceId')]"
+          },
+          "actionGroupResourceId": {
+            "value": "[parameters('operationalActionGroupResourceId')]"
+          },
+          "displayName": {
+            "value": "Advanced auditing retention setup needs review"
+          },
+          "alertDescription": {
+            "value": "Bootstrap degraded, stale or unknown; verify actual Purview retention separately."
+          },
+          "query": {
+            "value": "[replace(variables('$fxv#1'), '__AUTOMATION_ACCOUNT_ID__', resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName')))]"
+          },
+          "windowSize": {
+            "value": "PT10M"
+          },
+          "autoMitigate": {
+            "value": false
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "8590852337594758615"
+            }
+          },
+          "parameters": {
+            "alertRuleName": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Name of the Azure Monitor scheduled-query rule."
+              }
+            },
+            "location": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Azure region of the target Log Analytics workspace."
+              }
+            },
+            "workspaceResourceId": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource ID of the target Log Analytics workspace."
+              }
+            },
+            "actionGroupResourceId": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource ID of the action group invoked when the rule fires."
+              }
+            },
+            "displayName": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Display name shown for the scheduled-query rule."
+              }
+            },
+            "alertDescription": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Solution-owned description of the alert behavior."
+              }
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "metadata": {
+                "description": "Solution-owned KQL query evaluated by the rule."
+              }
+            },
+            "severity": {
+              "type": "int",
+              "defaultValue": 2,
+              "minValue": 0,
+              "maxValue": 4,
+              "metadata": {
+                "description": "Alert severity from 0 (critical) through 4 (verbose)."
+              }
+            },
+            "evaluationFrequency": {
+              "type": "string",
+              "defaultValue": "PT5M",
+              "allowedValues": [
+                "PT5M"
+              ],
+              "metadata": {
+                "description": "ISO 8601 interval controlling how often the query is evaluated."
+              }
+            },
+            "windowSize": {
+              "type": "string",
+              "defaultValue": "PT5M",
+              "allowedValues": [
+                "PT5M",
+                "PT10M"
+              ],
+              "metadata": {
+                "description": "ISO 8601 interval controlling the query lookback window."
+              }
+            },
+            "autoMitigate": {
+              "type": "bool",
+              "metadata": {
+                "description": "Whether Azure Monitor automatically resolves a fired alert after the condition clears."
+              }
+            },
+            "dimensions": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Solution-owned dimensions emitted by the query and used to split alert instances."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Resource tags applied to the scheduled-query rule."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/scheduledQueryRules",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('alertRuleName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "displayName": "[parameters('displayName')]",
+                "description": "[parameters('alertDescription')]",
+                "severity": "[parameters('severity')]",
+                "enabled": true,
+                "evaluationFrequency": "[parameters('evaluationFrequency')]",
+                "windowSize": "[parameters('windowSize')]",
+                "scopes": [
+                  "[parameters('workspaceResourceId')]"
+                ],
+                "criteria": {
+                  "allOf": [
+                    {
+                      "query": "[parameters('query')]",
+                      "timeAggregation": "Count",
+                      "operator": "GreaterThan",
+                      "threshold": 0,
+                      "failingPeriods": {
+                        "numberOfEvaluationPeriods": 1,
+                        "minFailingPeriodsToAlert": 1
+                      },
+                      "dimensions": "[parameters('dimensions')]"
+                    }
+                  ]
+                },
+                "autoMitigate": "[parameters('autoMitigate')]",
+                "actions": {
+                  "actionGroups": [
+                    "[parameters('actionGroupResourceId')]"
+                  ]
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "alertRuleResourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/scheduledQueryRules', parameters('alertRuleName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName'))]"
+      ]
     }
   ],
   "outputs": {
@@ -333,6 +812,10 @@
     "EXCHANGE_ORGANIZATION_VARIABLE_NAME": {
       "type": "string",
       "value": "[variables('exchangeOrganizationVariableName')]"
+    },
+    "OPERATIONAL_ALERTS_ENABLED": {
+      "type": "bool",
+      "value": "[parameters('operationalAlertsEnabled')]"
     }
   }
 }

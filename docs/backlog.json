@@ -109,7 +109,12 @@
       "sources": [
         "README.md"
       ],
-      "evidence": [],
+      "evidence": [
+        "2026-10-10 bounded source implementation based on edd48cd5ac3866b13ddbe3640ae6181b7871975c: adopted hash-locked deployment-validation 1.1.1 and scheduled-query-notifications 0.1.0 at reference 6dc5841a3156b904b89f0f4ff8d97207a26ec15a. Read-only target-bound plan/report retains audit-specific Exchange gates; optional existing LAW/action-group routing adds job failures and qualified bootstrap-only degraded/stale/unknown retention signals. Literal disabled mode adds zero optional resources/permission delta.",
+        "PowerShell 7.6.6 offline validation: 46/46 registered Pester tests passed, including guarded actual adapter wire JSON, target snapshots, actual postprovision retention dispatch, scalar signal negatives and actual compiled production template/embedded KQL/hash locks. PowerShell parsing, Error-severity analyzer, permission/backlog schema and Bicep 0.46.1 checked-in ARM parity passed. No native deployment, live Kusto/ingestion, alert/recipient delivery, grants, jobs or Exchange/Purview outcome is claimed. Independent review and publication reconciliation remain pending; AUD-003 stays proposed and AUD-002/issue #1 remains separate.",
+        "Independent review identified cross-account bootstrap-state provenance loss. R2 retains the validated accountId in the bounded signal and compiled solution KQL converts missing/mismatched signal account IDs to unknown against trusted diagnostic _ResourceId before filtering. Actual decoder foreign-ID and compiled binding/order regression fixtures pass; no API/resource/permission/default delta was introduced.",
+        "R3 independent-review repair: optional retention persistence reads only the exact deployed azdValues output with strict boolean parsing, bypassing the common process-first environment helper. Actual postprovision branch fixtures prove conflicting process true/deployed false causes zero optional save calls and missing/malformed deployed output fails closed before persistence. Prior R1/R2 source/evidence snapshots remain preserved."
+      ],
       "blocker": null
     },
     {

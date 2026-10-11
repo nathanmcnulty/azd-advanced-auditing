@@ -10,6 +10,29 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function ConvertTo-AuditRetentionSetupSignal {
+  param([AllowNull()][string]$RawState, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
+  $status='unknown'
+  $observedAt=$null
+  $accountId=$null
+  try {
+    if ([string]::IsNullOrWhiteSpace($RawState) -or $RawState.Length -gt 2048) { throw 'Invalid state' }
+    $state=$RawState | ConvertFrom-Json -DateKind String -ErrorAction Stop
+    if (@($state.PSObject.Properties.Name | Where-Object { $_ -notin @('kind','schemaVersion','accountId','observedAt','setupState') }).Count -or
+      $state.kind -cne 'advancedAuditing.retentionSetup' -or $state.schemaVersion -cne '1.0' -or
+      $state.accountId -notmatch '^/subscriptions/[a-f0-9-]{36}/resourceGroups/[A-Za-z0-9_.()-]+/providers/Microsoft.Automation/automationAccounts/[A-Za-z0-9_-]+$' -or
+      $state.setupState -cnotin @('setupVerified','setupUnavailable','setupFailed') -or $state.observedAt -isnot [string]) { throw 'Invalid state' }
+    $stamp=[DateTimeOffset]::Parse($state.observedAt,[Globalization.CultureInfo]::InvariantCulture)
+    if ($stamp -gt $Now.AddMinutes(5)) { throw 'Invalid state' }
+    $observedAt=$stamp.ToUniversalTime().ToString('o')
+    $accountId=[string]$state.accountId
+    $status=if($stamp -lt $Now.AddDays(-7)){'stale'}elseif($state.setupState -eq 'setupVerified'){'bootstrapVerified'}else{'degraded'}
+  } catch { $status='unknown'; $observedAt=$null; $accountId=$null }
+  # Retain validated resource provenance. The diagnostic query binds it to
+  # the trusted emitting _ResourceId before treating any bootstrap status as usable.
+  [ordered]@{kind='advancedAuditing.retentionSetup';schemaVersion='1.0';accountId=$accountId;status=$status;observedAt=$observedAt;recordedAt=$Now.ToUniversalTime().ToString('o');evidenceScope='bootstrapOnly'} | ConvertTo-Json -Compress
+}
+
 function Get-ExchangeOrganization {
   param([Parameter(Mandatory = $false)][AllowEmptyString()][string]$ConfiguredValue)
 
@@ -31,6 +54,11 @@ function Get-ExchangeOrganization {
 }
 
 $exchangeOrganization = Get-ExchangeOrganization -ConfiguredValue $Organization
+# A bounded bootstrap observation is operational evidence, never a current
+# Purview retention check. Missing/old state stays unknown/stale respectively.
+$retentionSetupState=$null
+try { $retentionSetupState=[string](Get-AutomationVariable -Name 'AuditRetentionSetupState' -ErrorAction Stop) } catch { }
+Write-Output (ConvertTo-AuditRetentionSetupSignal -RawState $retentionSetupState)
 $minimumExchangeOnlineManagementVersion = [version]'3.10.1'
 $exchangeOnlineManagementModule = Get-Module -ListAvailable -Name 'ExchangeOnlineManagement' |
   Where-Object { $_.Version -ge $minimumExchangeOnlineManagementVersion } |
