@@ -11,13 +11,22 @@ Describe 'Read-only deployment adapter' {
         BeforeEach {
             $script:t=[pscustomobject]@{subscriptionId='cccccccc-cccc-cccc-cccc-cccccccccccc';tenantId='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';principalId='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';account='reader@example.invalid';resourceGroup='fixture-rg';automationAccount='fixture-audit';alertsEnabled=$false}
             $script:accountId="/subscriptions/$($t.subscriptionId)/resourceGroups/$($t.resourceGroup)/providers/Microsoft.Automation/automationAccounts/$($t.automationAccount)"
-            $script:foreign=$false;$script:mismatch=$false
+            $script:foreign=$false;$script:contextMismatch=''
             $script:urls=[Collections.Generic.List[string]]::new()
+            $script:contextArguments=[Collections.Generic.List[object]]::new()
             Mock az {
                 $global:LASTEXITCODE=0
                 if($args[0] -eq 'account'){
-                    $sub=if($script:mismatch){'foreign'}else{$script:t.subscriptionId}
-                    return (@{id=$sub;tenantId=$t.tenantId;user=@{name=$t.account;type='user'}}|ConvertTo-Json -Compress)
+                    $script:contextArguments.Add([string[]]$args)
+                    if($args.Count -ne 7 -or $args[1] -cne 'show' -or $args[2] -cne '--subscription' -or $args[4] -cne '--output' -or $args[5] -cne 'json' -or $args[6] -cne '--only-show-errors'){throw 'Unexpected context selector arguments'}
+                    $context=@{id=[string]$args[3];tenantId=$t.tenantId;user=@{name=$t.account;type='user'}}
+                    switch($script:contextMismatch){
+                        'subscription' {$context.id='dddddddd-dddd-dddd-dddd-dddddddddddd'}
+                        'tenant' {$context.tenantId='dddddddd-dddd-dddd-dddd-dddddddddddd'}
+                        'user' {$context.user.name='foreign@example.invalid'}
+                        'type' {$context.user.type='servicePrincipal'}
+                    }
+                    return ($context|ConvertTo-Json -Compress)
                 }
                 if($args[0] -ne 'rest' -or $args[2] -cne 'GET' -or $args -notcontains '--subscription'){throw 'Unexpected write/native command'}
                 $url=[string]$args[4];$id=$url.Replace('https://management.azure.com','').Split('?')[0]
@@ -45,11 +54,22 @@ Describe 'Read-only deployment adapter' {
             ($r.checks|Where-Object id -eq 'audit.operational-disabled').status|Should -Be 'skipped'
             Should -Invoke az -Times 6 -Exactly
         }
-        It 'stops all ARM reads on wrong cached context' {
-            $script:mismatch=$true
+        It 'passes the exact selected subscription in the actual context argv' {
+            $r=Invoke-AuditDeploymentValidation -Target $t
+            ($r.checks|Where-Object id -eq 'audit.context').status|Should -Be 'pass'
+            $script:contextArguments.Count|Should -Be 1
+            ($script:contextArguments[0] -join '|')|Should -BeExactly "account|show|--subscription|$($t.subscriptionId)|--output|json|--only-show-errors"
+        }
+        It 'stops all ARM reads on wrong returned <Field>' -ForEach @(
+            @{Field='subscription'},@{Field='tenant'},@{Field='user'},@{Field='type'}
+        ) {
+            $script:contextMismatch=$Field
             $r=Invoke-AuditDeploymentValidation -Target $t
             ($r.checks|Where-Object id -eq 'audit.context').status|Should -Be 'fail'
             Should -Invoke az -Times 1 -Exactly
+            $script:contextArguments.Count|Should -Be 1
+            $script:urls.Count|Should -Be 0
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter {$args[0] -eq 'rest'}
         }
         It 'rejects foreign resource response identity and never copies raw provider values' {
             $script:foreign=$true
@@ -79,13 +99,24 @@ Describe 'Read-only deployment adapter' {
             Should -Invoke az -Times 10 -Exactly
         }
         It 'retains each target snapshot when another definitions set and caller mutation occur later' {
+            $firstSubscription=$t.subscriptionId
             $first=@(New-AuditValidationDefinitions $t)
             $t.resourceGroup='later-rg'
+            $t.subscriptionId='dddddddd-dddd-dddd-dddd-dddddddddddd'
+            $secondSubscription=$t.subscriptionId
             $second=@(New-AuditValidationDefinitions $t)
-            $null=Invoke-AzdValidationSet -Definitions $first
+            $firstResult=Invoke-AzdValidationSet -Definitions $first
+            ($firstResult|Where-Object id -eq 'audit.context').status|Should -Be 'pass'
+            $script:contextArguments[0][3]|Should -BeExactly $firstSubscription
+            $script:urls.Count|Should -BeGreaterThan 0
+            @($script:urls|Where-Object{$_ -notlike "*/subscriptions/$firstSubscription/*"}).Count|Should -Be 0
             @($script:urls|Where-Object{$_ -notlike '*resourceGroups/fixture-rg/*'}).Count|Should -Be 0
             $script:urls.Clear()
-            $null=Invoke-AzdValidationSet -Definitions $second
+            $secondResult=Invoke-AzdValidationSet -Definitions $second
+            ($secondResult|Where-Object id -eq 'audit.context').status|Should -Be 'pass'
+            $script:contextArguments[1][3]|Should -BeExactly $secondSubscription
+            $script:urls.Count|Should -BeGreaterThan 0
+            @($script:urls|Where-Object{$_ -notlike "*/subscriptions/$secondSubscription/*"}).Count|Should -Be 0
             @($script:urls|Where-Object{$_ -notlike '*resourceGroups/later-rg/*'}).Count|Should -Be 0
         }
     }

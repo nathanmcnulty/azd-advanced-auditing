@@ -35,7 +35,7 @@ function Invoke-AuditBoundProbe {
     $accountId='/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $Target.subscriptionId,$Target.resourceGroup,$Target.automationAccount
     if($Probe -eq 'context'){
         try{
-            $text=& az account show --output json --only-show-errors 2>$null
+            $text=& az account show --subscription $Target.subscriptionId --output json --only-show-errors 2>$null
             if($LASTEXITCODE -ne 0){throw 'Unavailable'}
             $account=($text -join "`n")|ConvertFrom-Json -DateKind String
             if($account.id -ine $Target.subscriptionId -or $account.tenantId -ine $Target.tenantId -or $account.user.name -ine $Target.account -or $account.user.type -ne 'user'){throw 'Mismatch'}
