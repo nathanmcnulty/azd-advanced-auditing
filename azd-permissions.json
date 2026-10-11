@@ -11,11 +11,11 @@
       "evidence": [
         {
           "path": "infra/main.bicep",
-          "sha256": "2453b6684c2e338b00a832c63374a468fe9c7cc6efcf5f701f0d937d36db2412"
+          "sha256": "eb301b905e4ccf8161490045f20092284acc58aab40b7f967c3b397be0e51d7a"
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "ea77edb0d9351acba6f4da70a731e2f12ae454461db064633a7cf57eb774d55e"
+          "sha256": "bb72529de39d90445ce488b98d885352f77822503f3c88cdd8ffc15cb57e5f9a"
         }
       ],
       "feature": "baseline-deployment",
@@ -33,11 +33,11 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "e6cd2fd2cd1e4ef62fa0cc29f52a5e065a360b85de853fd32ca30aa934f6ecae"
+          "sha256": "5b0cd2f4d647570102e4a411c83dabd2f25c49cf0e9a569d35cb40b71d329a46"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "048046d77d1a84d5c45d9c0ab52bfc2652904bfa2a8007ae4756eeaa626bde7d"
+          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
         }
       ],
       "feature": "mailbox-auditing",
@@ -55,11 +55,11 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "e6cd2fd2cd1e4ef62fa0cc29f52a5e065a360b85de853fd32ca30aa934f6ecae"
+          "sha256": "5b0cd2f4d647570102e4a411c83dabd2f25c49cf0e9a569d35cb40b71d329a46"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "048046d77d1a84d5c45d9c0ab52bfc2652904bfa2a8007ae4756eeaa626bde7d"
+          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
         }
       ],
       "feature": "mailbox-auditing",
@@ -95,7 +95,7 @@
       "evidence": [
         {
           "path": "infra/main.bicep",
-          "sha256": "2453b6684c2e338b00a832c63374a468fe9c7cc6efcf5f701f0d937d36db2412"
+          "sha256": "eb301b905e4ccf8161490045f20092284acc58aab40b7f967c3b397be0e51d7a"
         },
         {
           "path": "hooks/AuditOperationalState.ps1",
