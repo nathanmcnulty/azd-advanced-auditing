@@ -40,3 +40,13 @@ actually ingested diagnostic records, scheduled alert/routing/recipient delivery
 effective permission and Exchange/Purview acceptance remain separate open gates.
 The supported-platform retest in AUD-002 and issue #1 is unaffected. The canonical
 [backlog evidence](backlog.md) records receipt and independent-review hashes.
+A later zero-resource ARM request with `validationLevel: Provider` returned HTTP
+200 for a literal template containing the original Automation account settings.
+The virtual account and deployment were absent before and after; the existing
+resource-group fingerprint, Registered provider state and default subscription
+were unchanged. No provisioning, registration, grants or new authentication were
+requested. Provider preflight is best effort and can leave Activity Log telemetry.
+This qualifies present template validation only. It does not prove actual account
+creation, automatic-child ownership, effective permissions, runtime or ingestion,
+or explain the earlier failed setup. AUD-003 remains proposed; the canonical
+backlog retains the source/request/receipt hashes and the failed attempt.
