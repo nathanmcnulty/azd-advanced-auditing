@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "10844721282064496838"
+      "templateHash": "7287037771850015021"
     }
   },
   "parameters": {
@@ -408,7 +408,7 @@
             "value": "[replace(variables('$fxv#0'), '__AUTOMATION_ACCOUNT_ID__', resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName')))]"
           },
           "windowSize": {
-            "value": "PT10M"
+            "value": "PT30M"
           },
           "autoMitigate": {
             "value": false
@@ -424,7 +424,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.46.1.21595",
-              "templateHash": "8590852337594758615"
+              "templateHash": "16210445411432362849"
             }
           },
           "parameters": {
@@ -501,7 +501,8 @@
               "defaultValue": "PT5M",
               "allowedValues": [
                 "PT5M",
-                "PT10M"
+                "PT10M",
+                "PT30M"
               ],
               "metadata": {
                 "description": "ISO 8601 interval controlling the query lookback window."
@@ -614,7 +615,7 @@
             "value": "[replace(variables('$fxv#1'), '__AUTOMATION_ACCOUNT_ID__', resourceId('Microsoft.Automation/automationAccounts', variables('resolvedAutomationAccountName')))]"
           },
           "windowSize": {
-            "value": "PT10M"
+            "value": "PT30M"
           },
           "autoMitigate": {
             "value": false
@@ -630,7 +631,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.46.1.21595",
-              "templateHash": "8590852337594758615"
+              "templateHash": "16210445411432362849"
             }
           },
           "parameters": {
@@ -707,7 +708,8 @@
               "defaultValue": "PT5M",
               "allowedValues": [
                 "PT5M",
-                "PT10M"
+                "PT10M",
+                "PT30M"
               ],
               "metadata": {
                 "description": "ISO 8601 interval controlling the query lookback window."

@@ -283,7 +283,7 @@ module failedJobAlert 'vendor/Azd.AzureMonitorNotifications/scheduled-query-aler
     displayName: 'Advanced auditing failed jobs'
     alertDescription: 'Investigate failed, suspended or stopped jobs; no remediation is automatic.'
     query: replace(loadTextContent('queries/failed-jobs.kql'), '__AUTOMATION_ACCOUNT_ID__', automationAccount.id)
-    windowSize: 'PT10M'
+    windowSize: 'PT30M'
     autoMitigate: false
     tags: tags
   }
@@ -299,7 +299,7 @@ module retentionSetupAlert 'vendor/Azd.AzureMonitorNotifications/scheduled-query
     displayName: 'Advanced auditing retention setup needs review'
     alertDescription: 'Bootstrap degraded, stale or unknown; verify actual Purview retention separately.'
     query: replace(loadTextContent('queries/retention-setup.kql'), '__AUTOMATION_ACCOUNT_ID__', automationAccount.id)
-    windowSize: 'PT10M'
+    windowSize: 'PT30M'
     autoMitigate: false
     tags: tags
   }

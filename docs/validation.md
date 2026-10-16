@@ -6,6 +6,8 @@ On 2026-10-11, an independently reviewed private harness qualified the productio
 
 This proves synthetic query semantics in the native engine. It does not prove diagnostic ingestion, real runbook logs, deployment report readiness, scheduled alert execution, action-group routing, delivery, or Exchange/Purview behavior. The harness queried no actual workspace log data, created no resources or grants, initiated no authentication, and verified the default subscription remained unchanged. AUD-003 remains proposed pending the remaining native acceptance gates; the separate supported-platform Exchange retest remains open.
 
+A later disposable synthetic test qualified native job/stream ingestion, exact production-query results, and one zero-receiver failed-job scheduled alert reaching Fired. It used the Azure 7.6 preview runtime and did not run Exchange/Purview operations or send notifications. See [operational qualification](operational-alerts.md#native-diagnostics-and-scheduled-evaluation-2026-10-16-utc) for its precise scope and remaining gates.
+
 Create a private target JSON file with `subscriptionId`, `tenantId`, `account` (cached user's UPN), `principalId` (Automation managed identity), `resourceGroup`, `automationAccount`, and boolean `alertsEnabled`. When enabled, add exact same-subscription `workspaceId` and `actionGroupId` resource IDs. No tokens belong in this file. Unknown fields and invalid identifiers are refused.
 
 ```powershell

@@ -18,10 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install PowerShell dependencies
-        shell: pwsh
-        run: Install-Module Pester, PSScriptAnalyzer -Scope CurrentUser -Force
-
       - name: Require PowerShell 7.6 or later
         shell: bash
         run: |
@@ -30,6 +26,12 @@ jobs:
             sudo apt-get install --only-upgrade -y powershell
           fi
           pwsh -NoProfile -Command 'if ($PSVersionTable.PSVersion -lt [version]"7.6") { throw "PowerShell 7.6+ required" }'
+
+      - name: Install PowerShell dependencies
+        shell: pwsh
+        run: |
+          Install-Module Pester -RequiredVersion 6.2.0 -Scope CurrentUser -Force
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
 
       - name: Install pinned Bicep before compiled-template tests
         shell: pwsh
@@ -61,7 +63,9 @@ jobs:
 
       - name: Run Pester tests
         shell: pwsh
-        run: Invoke-Pester -Path .\tests -CI
+        run: |
+          Import-Module Pester -RequiredVersion 6.2.0 -Force
+          Invoke-Pester -Path .\tests -CI
 
       - name: Build Bicep
         shell: pwsh

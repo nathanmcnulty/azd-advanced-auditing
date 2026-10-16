@@ -28,6 +28,10 @@ Describe 'Actual compiled optional monitoring resources' {
             $child[0].type|Should -Be 'Microsoft.Insights/scheduledQueryRules'
             $alert.properties.parameters.workspaceResourceId.value|Should -Be "[parameters('operationalWorkspaceResourceId')]"
             $alert.properties.parameters.actionGroupResourceId.value|Should -Be "[parameters('operationalActionGroupResourceId')]"
+            $alert.properties.parameters.windowSize.value|Should -Be 'PT30M'
+            $alert.properties.template.parameters.evaluationFrequency.defaultValue|Should -Be 'PT5M'
+            $child[0].properties.evaluationFrequency|Should -Be "[parameters('evaluationFrequency')]"
+            $alert.properties.parameters.autoMitigate.value|Should -BeFalse
             $expression=$alert.properties.parameters.query.value
             $expression|Should -Match 'replace\(variables'
             $variableName=[regex]::Match($expression, "variables\('([^']+)'\)").Groups[1].Value
@@ -51,7 +55,8 @@ Describe 'Actual compiled optional monitoring resources' {
     It 'hash-locks all immutable copies and leaves audit remediation/schedule parameters unchanged' {
         $lock=Get-Content "$root/azd-components.lock.json" -Raw|ConvertFrom-Json
         foreach($component in $lock.components){
-            $component.sourceRevision|Should -Be '6dc5841a3156b904b89f0f4ff8d97207a26ec15a'
+            $expectedRevision=if($component.id -eq 'azure-monitor-scheduled-query-notifications'){'2948cdbaf9497b69dd7b288b028b6b84dc2fb23b'}else{'6dc5841a3156b904b89f0f4ff8d97207a26ec15a'}
+            $component.sourceRevision|Should -Be $expectedRevision
             foreach($file in $component.files){(Get-FileHash (Join-Path $root $file.target)).Hash.ToLowerInvariant()|Should -Be $file.sha256}
         }
         $template.parameters.scheduleStartOffset.defaultValue|Should -Be 'PT15M'

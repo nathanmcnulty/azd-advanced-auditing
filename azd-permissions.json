@@ -11,7 +11,7 @@
       "evidence": [
         {
           "path": "infra/main.bicep",
-          "sha256": "eb301b905e4ccf8161490045f20092284acc58aab40b7f967c3b397be0e51d7a"
+          "sha256": "d3e8105b32079e3ee41a79e41f3b521f0d3055ac0918c02aafe6aa21ce084f16"
         },
         {
           "path": "hooks/Common.ps1",
@@ -95,7 +95,7 @@
       "evidence": [
         {
           "path": "infra/main.bicep",
-          "sha256": "eb301b905e4ccf8161490045f20092284acc58aab40b7f967c3b397be0e51d7a"
+          "sha256": "d3e8105b32079e3ee41a79e41f3b521f0d3055ac0918c02aafe6aa21ce084f16"
         },
         {
           "path": "hooks/AuditOperationalState.ps1",

@@ -41,6 +41,7 @@ param evaluationFrequency string = 'PT5M'
 @allowed([
   'PT5M'
   'PT10M'
+  'PT30M'
 ])
 param windowSize string = 'PT5M'
 
