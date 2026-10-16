@@ -50,3 +50,33 @@ This qualifies present template validation only. It does not prove actual accoun
 creation, automatic-child ownership, effective permissions, runtime or ingestion,
 or explain the earlier failed setup. AUD-003 remains proposed; the canonical
 backlog retains the source/request/receipt hashes and the failed attempt.
+
+## Account and synthetic runtime retry (2026-10-16 UTC)
+
+A fresh, independently reviewed lab retry created one disposable Automation
+account with the production account settings: Basic SKU, system-assigned identity,
+local authentication disabled, and public network access enabled. Readback verified
+those settings, no user-assigned identities, and account state `Ok`. This proves
+present account creation; it does not explain the earlier setup failure.
+
+One synthetic runbook then completed in an explicitly selected PowerShell `7.6`
+runtime environment. Exact draft-content readback and a unique output marker bound
+the job to the inert test script. Its reported version was **`7.6.0-preview.5`**.
+This qualifies execution of the selected Azure 7.6 preview runtime, not stable/GA
+PowerShell 7.6 availability or production runbook/module compatibility. The synthetic
+runbook performed no downstream service authentication or Exchange/Purview
+operations. The retry added no packages, schedules, diagnostics, alerts, roles,
+or grants. The harness reused cached Azure CLI authentication for ARM and Graph.
+
+Two private-harness readback/parsing failures were preserved: binary draft-content
+readback and semantic prerelease-version parsing. Reviewed repairs resumed the
+existing draft and polled the same job; no setup or job was resubmitted.
+
+Cleanup verified the exact disposable group and account absent through ARM 404
+readbacks, and its captured managed-identity service principal absent through a
+Graph 404 readback. The default subscription was unchanged. No workspace or other
+top-level resource was created. The canonical backlog records the receipt hashes.
+
+AUD-003 remains proposed. Native diagnostic ingestion, production KQL over those
+records, scheduled alert/routing/recipient delivery, effective permissions, and
+Exchange/Purview acceptance remain open. AUD-002 and issue #1 are unchanged.
