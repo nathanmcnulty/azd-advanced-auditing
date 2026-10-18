@@ -77,3 +77,7 @@ azd down --purge
 The pre-down hook removes the template's Automation delete lock so Azure resources can be deleted. Tenant audit settings, retention policies, Exchange service-principal links, roles, and role groups are not automatically reverted. Inventory and remove them separately only with explicit administrator approval.
 
 This work rebuilds the solution described in the [advanced auditing guide](https://nathanmcnulty.com/blog/2025/04/comprehensive-guide-to-configuring-advanced-auditing/) and is released under this repository's license.
+
+### Read-only validation and optional monitoring
+
+See [deployment validation](docs/validation.md) and [optional operational alerts](docs/operational-alerts.md). PowerShell 7.6+ is required for these tools; alerts default off.

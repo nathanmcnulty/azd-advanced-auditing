@@ -1,0 +1,8 @@
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.AUTOMATION" and Category == "JobStreams" and StreamType_s == "Output"
+| where _ResourceId =~ "__AUTOMATION_ACCOUNT_ID__" and RunbookName_s == "Enable-AdvancedAuditing"
+| extend signal = parse_json(ResultDescription)
+| where tostring(signal.kind) == "advancedAuditing.retentionSetup" and tostring(signal.schemaVersion) == "1.0"
+| extend status = iff(isnotempty(tostring(signal.accountId)) and tolower(tostring(signal.accountId)) == tolower(_ResourceId), tostring(signal.status), "unknown")
+| where status in ("degraded", "stale", "unknown")
+| project TimeGenerated, RunbookName_s, JobId_g, status, _ResourceId

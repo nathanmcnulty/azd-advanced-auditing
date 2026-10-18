@@ -1,0 +1,5 @@
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.AUTOMATION" and Category == "JobLogs"
+| where _ResourceId =~ "__AUTOMATION_ACCOUNT_ID__"
+| where ResultType in ("Failed", "Stopped", "Suspended")
+| project TimeGenerated, RunbookName_s, JobId_g, ResultType, _ResourceId

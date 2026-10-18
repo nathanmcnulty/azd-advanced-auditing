@@ -30,6 +30,18 @@ param scheduleStartOffset string = 'PT15M'
 @description('Enable a can-not-delete lock on the Automation account.')
 param enableResourceLock bool = true
 
+@description('Optional operational telemetry and alerts. No resources are added when false.')
+param operationalAlertsEnabled bool = false
+
+@description('Existing Log Analytics workspace ARM ID selected by the owner; required only for operational alerts.')
+param operationalWorkspaceResourceId string = ''
+
+@description('Region of the existing workspace, which may differ from the Automation account region.')
+param operationalWorkspaceLocation string = ''
+
+@description('Existing action group ARM ID. Recipient configuration remains owner-controlled.')
+param operationalActionGroupResourceId string = ''
+
 var runtimeEnvironmentName = 'PowerShell-76-AdvancedAuditing'
 var scheduleName = 'advanced-auditing-daily'
 var mainRunbookName = 'Enable-AdvancedAuditing'
@@ -237,3 +249,58 @@ output MAIN_RUNBOOK_NAME string = mainRunbook.name
 output VALIDATE_CONNECTION_RUNBOOK_NAME string = validateConnectionRunbook.name
 output VALIDATE_CONFIGURATION_RUNBOOK_NAME string = validateConfigurationRunbook.name
 output EXCHANGE_ORGANIZATION_VARIABLE_NAME string = exchangeOrganizationVariable.name
+output OPERATIONAL_ALERTS_ENABLED bool = operationalAlertsEnabled
+
+resource retentionSetupState 'Microsoft.Automation/automationAccounts/variables@2023-11-01' = if (operationalAlertsEnabled) {
+  parent: automationAccount
+  name: 'AuditRetentionSetupState'
+  properties: {
+    description: 'Bounded bootstrap retention-setup observation, not effective Purview state.'
+    isEncrypted: false
+    value: '""'
+  }
+}
+
+resource operationalDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (operationalAlertsEnabled) {
+  scope: automationAccount
+  name: 'advanced-auditing-operational'
+  properties: {
+    workspaceId: operationalWorkspaceResourceId
+    logs: [
+      { category: 'JobLogs', enabled: true }
+      { category: 'JobStreams', enabled: true }
+    ]
+  }
+}
+
+module failedJobAlert 'vendor/Azd.AzureMonitorNotifications/scheduled-query-alert.bicep' = if (operationalAlertsEnabled) {
+  name: 'advanced-auditing-failed-jobs'
+  params: {
+    alertRuleName: '${resolvedAutomationAccountName}-failed-jobs'
+    location: operationalWorkspaceLocation
+    workspaceResourceId: operationalWorkspaceResourceId
+    actionGroupResourceId: operationalActionGroupResourceId
+    displayName: 'Advanced auditing failed jobs'
+    alertDescription: 'Investigate failed, suspended or stopped jobs; no remediation is automatic.'
+    query: replace(loadTextContent('queries/failed-jobs.kql'), '__AUTOMATION_ACCOUNT_ID__', automationAccount.id)
+    windowSize: 'PT30M'
+    autoMitigate: false
+    tags: tags
+  }
+}
+
+module retentionSetupAlert 'vendor/Azd.AzureMonitorNotifications/scheduled-query-alert.bicep' = if (operationalAlertsEnabled) {
+  name: 'advanced-auditing-retention-setup'
+  params: {
+    alertRuleName: '${resolvedAutomationAccountName}-retention-setup'
+    location: operationalWorkspaceLocation
+    workspaceResourceId: operationalWorkspaceResourceId
+    actionGroupResourceId: operationalActionGroupResourceId
+    displayName: 'Advanced auditing retention setup needs review'
+    alertDescription: 'Bootstrap degraded, stale or unknown; verify actual Purview retention separately.'
+    query: replace(loadTextContent('queries/retention-setup.kql'), '__AUTOMATION_ACCOUNT_ID__', automationAccount.id)
+    windowSize: 'PT30M'
+    autoMitigate: false
+    tags: tags
+  }
+}
