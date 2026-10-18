@@ -5,7 +5,7 @@
 
 - **Schema version:** 1.0.0
 - **Repository:** nathanmcnulty/azd-advanced-auditing
-- **Source revision:** `e7d4d07c579574bde2458154766121c302333860`
+- **Source revision:** `1e0d5ea5a1760fd17f098fad79d7ff794d8aeb4d`
 - **Captured:** 2026-10-18
 - **Items:** 6
 
@@ -272,10 +272,10 @@ Review AUD-002 against the current repository state. Its status or authorization
 
 - **Kind:** feature
 - **Priority:** P2
-- **Status:** proposed
+- **Status:** blocked
 - **Wave:** 2
 - **Authorization:** local-only
-- **Blocker:** _none_
+- **Blocker:** Commercial lab subscription 43babb60-9e73-4dc8-b769-4401c01aad73 is Disabled &lpar;fresh ARM readback, 2026-10-18&rpar;; resource creation is rejected with ReadOnlyDisabledSubscription. Retention-rule native evaluation remains pending until the authorized lab accepts writes; no alternative subscription was used.
 - **Claim:** _none_
 
 **Problem:**
@@ -329,6 +329,7 @@ Automation output should separate configured resources, job failures, degraded r
 - 2026-10-16 a fresh independently reviewed synthetic lab run qualified native ingestion with the exact production retention converter and unchanged production KQL. Five jobs completed and one intentionally failed on Azure 7.6.0-preview.5. ARM resource job names were bound to their distinct properties.jobId execution GUIDs before filtering diagnostics. Native receipt SHA256 F1861605E27BE7C76EDD0A83EF47863B01E7FC125C7E9D9E82055685016F5EC5 proves six nonce/case/version-bound outputs, exactly one failed-job match, and four retention matches &lpar;degraded/stale/unknown/foreign-account-to-unknown&rpar;, with healthy excluded. No production Exchange code or downstream service authentication ran. Preserved private-harness KQL alias and job-ID assumptions were repaired without job resubmission.
 - Documented fifteen-minute Automation ingestion delay can exceed the original ten-minute query window plus evaluation timing. Both optional rules now select PT30M using pilot notifications 0.2.0 vendored at reviewed immutable reference 2948cdbaf9497b69dd7b288b028b6b84dc2fb23b &lpar;draft reference PR &num;101; no release tag&rpar;. PT5M evaluation, autoMitigate=false, literal disabled default, permissions and receiver ownership remain unchanged. The actual canonical compiled fixture deployed one failed-job rule with zero-receiver action group; provider receipt SHA256 1A7C82CE528EE20F91A18542098C1F0377EC4D4C2341287C1DF7CFB912948127 verifies policy/query/target readback and Fired readback SHA256 67391C9820D523AE06F6449636CF3943E539B4803B0089704C86BFC80D122F2B proves scheduled evaluation for that exact rule/workspace. Cleanup summary SHA256 FCF19876FC2C0C1CE30CDA19A15786FD04A7B624926DEC2E880DC77AA1F464E8 binds exact rule/action-group/workspace/account/group/MSI absence, no recoverable workspace tombstone and unchanged default. No recipient delivery or deduplication was exercised. AUD-003 stays proposed&colon; retention-rule scheduled evaluation, routing/recipient delivery and effective-permission acceptance remain open. Production Exchange/Purview and stable runtime acceptance remain separate in AUD-002/issue &num;1. Local PowerShell 7.6.6/Pester 6.2 tests passed 50/50 after the window/pin update; CI now pins Pester 6.2 after verifying PowerShell 7.6+.
 - 2026-10-18 interruption reconciliation&colon; the additional 2026-10-16 synthetic retention-evaluation attempt reached five Completed jobs and one intentional Failed job with exact native execution/output binding, but stopped before any retention rule or ARM deployment was created. Initial direct ingestion reads had no matching rows; the interruption exceeded the PT30M observation window, so jobs were not resubmitted and no scheduled retention-rule evaluation is claimed. Fresh owned cleanup proves group, Automation account, managed-identity service principal, action group, rule/deployment and workspace absence, no recoverable workspace tombstone, and unchanged CLI default. Private terminal cleanup-summary SHA256 6C596482C854F9BC12AE58C1D7B40033FFD79C219B8D889E712ECE3D302935A3 binds the three detailed journals. No receiver delivery, new grant, package, schedule or Exchange/Purview operation occurred. Existing failed-job Fired proof remains separate; retention-rule evaluation and other live gates remain open.
+- 2026-10-18 fresh retention-evaluation attempt 8e23355a792a4ba1929138cea579a5e5&colon; independently reviewed synthetic harness and immutable source/converter bindings passed preflight &lpar;9 alert fixtures, 5 row-freshness fixtures, 34 matching inventory hashes&rpar;. The first resource-group PUT returned HTTP 409 ReadOnlyDisabledSubscription. Fresh ARM subscription metadata reported Disabled with spendingLimit On. No account, workspace, alert, job, identity, grant or recipient was created. Exact group/account GETs returned 404, cleanupVerified and defaultUnchanged are true, and no job was submitted or resubmitted. Private terminal summary SHA256 67A4746BAE08766A5DB9C3F5D11F1B638FE041605055CDA21A6AC8FF70604818 binds the rejected attempt, fresh subscription readback, journal and provision/cleanup logs; retention-rule scheduled evaluation remains unqualified.
 
 **Review and authorization note:**
 
