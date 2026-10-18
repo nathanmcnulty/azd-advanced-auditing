@@ -49,6 +49,11 @@ An older environment validated Azure deployment, schedule timing, domain lookup,
 
 Microsoft now documents that ExchangeOnlineManagement 3.10.0 and later require PowerShell 7.6. The old result is historical evidence, not a supported-platform determination. The template now uses PowerShell 7.6; [issue #1](https://github.com/nathanmcnulty/azd-advanced-auditing/issues/1) tracks the next authorized end-to-end retest.
 
+A [PowerShell 7.6.6 operator read probe](operator-read-validation-20261018.md)
+passed four Exchange reads for the lab operator, but Purview token authentication
+returned `UnAuthorized`. Managed-identity remediation and the end-to-end retest
+remain open.
+
 References:
 
 - [Exchange Online PowerShell module requirements](https://learn.microsoft.com/powershell/exchange/exchange-online-powershell-v2)
