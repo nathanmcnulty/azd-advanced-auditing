@@ -81,7 +81,7 @@ function Connect-ComplianceForBootstrap {
 
   try {
     Connect-IPPSSession -AccessToken $complianceToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
-    return
+    return $true
   }
   catch {
     Write-Warning "Security & Compliance PowerShell access-token auth with UserPrincipalName failed. Retrying with Organization. Error: $($_.Exception.Message)"
