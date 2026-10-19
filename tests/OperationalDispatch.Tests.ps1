@@ -6,7 +6,7 @@ BeforeAll {
     if($start -lt 0 -or $end -lt $start){throw 'Actual retention dispatch boundary not found'}
     $script:branch=[scriptblock]::Create($source.Substring($start,$end-$start))
     function Get-ValueFromEnvironment {throw 'Optional flag must not use process-first helper'}
-    function Ensure-AuditRetentionPolicy {param($PolicyName) if($script:failPolicy){throw 'fixture policy failure'}}
+    function Ensure-AuditRetentionPolicy {param($PolicyName) if('guard' -ceq [string]$script:failPolicy){$e=[InvalidOperationException]::new('fixture guard failure');$e.Data['AuditTargetGuard']=$true;throw $e}; if($script:failPolicy){throw 'fixture policy failure'}}
     function Save-AuditRetentionSetupState {param($Enabled,$SetupState,$SubscriptionId,$ResourceGroupName,$AutomationAccountName) $script:states.Add("${Enabled}:${SetupState}")}
 }
 Describe 'Actual postprovision retention dispatch block' {
@@ -30,6 +30,11 @@ Describe 'Actual postprovision retention dispatch block' {
         $complianceConnected=$true;$script:failPolicy=$true
         {. $script:branch}|Should -Throw 'fixture policy failure'
         @($script:states)|Should -Be @('True:setupFailed')
+    }
+    It 'does not persist a failed-state variable after a target or native-session safety failure' {
+        $complianceConnected=$true;$script:failPolicy='guard'
+        {. $script:branch}|Should -Throw 'fixture guard failure'
+        $script:states.Count|Should -Be 0
     }
     It 'ignores conflicting true process environment when deployed false, making zero optional save calls' {
         $complianceConnected=$false;$azdValues.OPERATIONAL_ALERTS_ENABLED='false'

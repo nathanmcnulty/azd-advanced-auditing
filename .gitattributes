@@ -1,3 +1,4 @@
+hooks/AuditOperatorTarget.ps1 text eol=lf
 hooks/AuditOperationalState.ps1 text eol=lf
 hooks/Common.ps1 text eol=lf
 hooks/postprovision.ps1 text eol=lf

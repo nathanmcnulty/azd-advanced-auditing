@@ -18,9 +18,11 @@ if ([string]::IsNullOrWhiteSpace($subscriptionId) -or [string]::IsNullOrWhiteSpa
   throw 'Required azd environment values were not found before teardown.'
 }
 
+Assert-AuditOperatorTarget -SubscriptionId $subscriptionId | Out-Null
 $lockId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/providers/Microsoft.Authorization/locks/lock-cannot-delete-automation' -f $subscriptionId, $resourceGroupName, $automationAccountName)
 $lockExists = & az lock show --ids $lockId --subscription $subscriptionId --only-show-errors -o json 2>$null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($lockExists)) {
+  Assert-AuditOperatorTarget -SubscriptionId $subscriptionId | Out-Null
   & az lock delete --ids $lockId --subscription $subscriptionId --only-show-errors
   if ($LASTEXITCODE -ne 0) {
     throw "Could not remove Automation account lock '$lockId'."

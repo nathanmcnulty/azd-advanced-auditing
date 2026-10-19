@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path -Path $PSScriptRoot -ChildPath 'AuditOperatorTarget.ps1')
+
 function Write-Section {
   param([Parameter(Mandatory = $true)][string]$Message)
 
@@ -72,6 +74,9 @@ function Get-AzdEnvironmentValues {
 
   $values = @{}
   $lines = & azd env get-values --no-prompt 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Could not read the selected azd environment values.'
+  }
   foreach ($line in $lines) {
     if ([string]::IsNullOrWhiteSpace($line)) {
       continue
@@ -118,6 +123,11 @@ function Set-AzdEnvironmentValue {
   )
 
   Ensure-Command -Name 'azd'
+  $target = Assert-AuditOperatorTarget
+  if (($Name -ieq 'AZURE_SUBSCRIPTION_ID' -and $Value -ine $target.SubscriptionId) -or
+      ($Name -ieq 'AZURE_TENANT_ID' -and $Value -ine $target.TenantId)) {
+    throw 'Cannot change the selected operator target during this operation.'
+  }
   & azd env set $Name $Value --no-prompt | Out-Null
   if ($LASTEXITCODE -ne 0) {
     throw "Could not persist azd environment value '$Name'."
@@ -197,15 +207,16 @@ function Set-AutomationVariableValue {
     }
   } | ConvertTo-Json -Depth 5 -Compress
 
-  $armToken = & az account get-access-token --resource https://management.azure.com --query accessToken -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($armToken)) {
-    throw 'Could not acquire an Azure Resource Manager access token from Azure CLI.'
-  }
+  $target = Assert-AuditOperatorTarget -SubscriptionId $SubscriptionId
+  $armToken = Get-AuditScopedAccessToken -ResourceUrl 'https://management.azure.com/' -Target $target
+  Assert-AuditOperatorTarget -SubscriptionId $SubscriptionId | Out-Null
 
   Invoke-RestMethod `
     -Method PUT `
     -Uri $uri `
     -Headers @{ Authorization = "Bearer $($armToken.Trim())" } `
+    -MaximumRedirection 0 `
+    -TimeoutSec 30 `
     -ContentType 'application/json' `
     -Body $payload | Out-Null
 }
@@ -234,6 +245,7 @@ function Publish-AutomationRunbookContent {
     throw "Could not inspect Automation runbook '$RunbookName' before publishing."
   }
 
+  Assert-AuditOperatorTarget -SubscriptionId $SubscriptionId | Out-Null
   & az automation runbook replace-content `
     --subscription $SubscriptionId `
     --resource-group $ResourceGroupName `
@@ -246,6 +258,7 @@ function Publish-AutomationRunbookContent {
     throw "Could not replace content for Automation runbook '$RunbookName'."
   }
 
+  Assert-AuditOperatorTarget -SubscriptionId $SubscriptionId | Out-Null
   & az automation runbook publish `
     --subscription $SubscriptionId `
     --resource-group $ResourceGroupName `
@@ -269,7 +282,7 @@ function Write-AutomationJobStreams {
   $streamsUri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/jobs/{3}/streams?api-version=2023-11-01' -f $SubscriptionId, $ResourceGroupName, $AutomationAccountName, $JobId)
 
   try {
-    $streamResponse = & az rest --method GET --uri $streamsUri --only-show-errors -o json | ConvertFrom-Json
+    $streamResponse = & az rest --subscription $SubscriptionId --method GET --uri $streamsUri --only-show-errors -o json | ConvertFrom-Json
     foreach ($stream in @($streamResponse.value)) {
       if ($null -eq $stream) {
         continue
@@ -373,6 +386,7 @@ function Start-AutomationRunbookAndWait {
     }
   }
 
+  Assert-AuditOperatorTarget -SubscriptionId $SubscriptionId | Out-Null
   $job = & az @commandArgs | ConvertFrom-Json
 
   $jobId = ''

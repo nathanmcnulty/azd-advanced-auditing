@@ -77,6 +77,9 @@ Describe 'Automation runbook publication' {
   ) {
     & {
       . $publisherDefinition
+      # This regression isolates CLI publication failure propagation. Target
+      # rejection and state changes use the real helper in OperatorCommon.
+      function Assert-AuditOperatorTarget { param($SubscriptionId) }
       $filePath = Join-Path $TestDrive 'runbook.ps1'
       Set-Content -LiteralPath $filePath -Value 'Write-Output "fixture"'
       $script:publisherCalls = [System.Collections.Generic.List[string]]::new()
