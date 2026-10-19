@@ -24,6 +24,10 @@ BeforeAll {
       . $script:connectionDefinition
       $calls = [Collections.Generic.List[object]]::new()
       $retentionCalls = [Collections.Generic.List[string]]::new()
+      # Connection-result regression uses deterministic guards; full native and
+      # target rejection paths are exercised in OperatorNative/OperatorCommon.
+      function Assert-AuditOperatorTarget {}
+      function Assert-AuditNativeContext { param($Service) }
       function Get-AzCliUserPrincipalName { 'operator@example.test' }
       function Get-AzCliAccessToken {
         param($ResourceUrl)
@@ -32,7 +36,7 @@ BeforeAll {
         'offline-token'
       }
       function Connect-IPPSSession {
-        param($AccessToken, $UserPrincipalName, $Organization, [bool]$ShowBanner)
+        param($AccessToken, $UserPrincipalName, $Organization, $CommandName, [bool]$ShowBanner)
         $calls.Add(@{} + $PSBoundParameters)
         if (($UserPrincipalName -and $FailUpn) -or ($Organization -and $FailOrganization)) { throw 'Offline connection failure.' }
         [pscustomobject]@{ UnexpectedOutput = 'must not escape the connection helper' }

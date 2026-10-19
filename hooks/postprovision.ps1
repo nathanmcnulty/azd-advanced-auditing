@@ -15,11 +15,17 @@ function Invoke-GraphRest {
     [Parameter(Mandatory = $false)][string]$Body
   )
 
+  $endpoint = [uri]$Uri
+  if ($endpoint.Scheme -cne 'https' -or $endpoint.Host -cne 'graph.microsoft.com' -or $endpoint.Port -ne 443 -or $endpoint.UserInfo -or $endpoint.Fragment -or $endpoint.AbsolutePath -notmatch '^/v1\.0/') {
+    throw 'Graph bootstrap requires an explicit public-cloud Graph endpoint.'
+  }
   $graphToken = Get-AzCliAccessToken -ResourceUrl 'https://graph.microsoft.com'
   $requestParams = @{
     Method  = $Method
     Uri     = $Uri
     Headers = @{ Authorization = "Bearer $graphToken" }
+    MaximumRedirection = 0
+    TimeoutSec = 30
   }
 
   if (-not [string]::IsNullOrWhiteSpace($Body)) {
@@ -27,6 +33,7 @@ function Invoke-GraphRest {
     $requestParams['Body'] = $Body
   }
 
+  $null = Assert-AuditOperatorTarget
   $response = Invoke-RestMethod @requestParams
   if ($null -eq $response) {
     return $null
@@ -37,40 +44,72 @@ function Invoke-GraphRest {
 
 function Get-AzCliAccessToken {
   param([Parameter(Mandatory = $true)][string]$ResourceUrl)
-
-  $token = & az account get-access-token --resource $ResourceUrl --query accessToken -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($token)) {
-    throw "Could not acquire an Azure CLI access token for resource '$ResourceUrl'."
-  }
-
-  return $token.Trim()
+  $target = Assert-AuditOperatorTarget
+  return (Get-AuditScopedAccessToken -ResourceUrl $ResourceUrl -Target $target)
 }
 
 function Get-AzCliUserPrincipalName {
-  $upn = & az account show --query user.name -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($upn)) {
-    throw 'Could not determine the signed-in Azure CLI user principal name.'
-  }
+  return (Assert-AuditOperatorTarget).UserPrincipalName
+}
 
-  return $upn.Trim()
+function Assert-AuditNativeContext {
+  param([ValidateSet('Exchange', 'Compliance')][string]$Service = 'Exchange', [string]$CommandName)
+
+  $target = Assert-AuditOperatorTarget
+  try {
+    $connections = @(Get-ConnectionInformation -ErrorAction Stop)
+    # Unknown session kind cannot establish which unprefixed commands it owns.
+    if (@($connections | Where-Object { $_.IsEopSession -isnot [bool] }).Count) { throw 'Unknown session kind.' }
+    $compliance = $Service -eq 'Compliance'
+    $selected = @($connections | Where-Object { $_.IsEopSession -eq $compliance })
+    if ($selected.Count -ne 1) { throw 'Ambiguous or absent native session.' }
+    $connection = $selected[0]
+    if ($connection.TenantID -isnot [string] -or $connection.UserPrincipalName -isnot [string] -or
+        $connection.TenantID -ine $target.TenantId -or $connection.UserPrincipalName -ine $target.UserPrincipalName -or
+        $connection.State -cne 'Connected' -or $connection.TokenStatus -cne 'Active' -or
+        $connection.ModulePrefix -or $connection.DelegatedOrganization -or $connection.CertificateAuthentication -isnot [bool] -or $connection.CertificateAuthentication -ne $false) {
+      throw 'Native session does not match the selected operator.'
+    }
+    if ($CommandName) {
+      # Exchange and Purview can export identically named commands. Verify the
+      # command PowerShell will actually dispatch belongs to this exact session.
+      $command = Get-Command -Name $CommandName -ErrorAction Stop
+      $moduleName = ([string]$connection.ModuleName -split '[\\/]')[-1]
+      if ([string]::IsNullOrWhiteSpace($moduleName) -or $command.CommandType -ne 'Function' -or
+          $command.ModuleName -cne $moduleName) { throw 'Native command is not owned by the verified session.' }
+    }
+    $endpoint = [uri]$connection.ConnectionUri
+    $validHost = if ($compliance) {
+      $endpoint.Host -eq 'ps.compliance.protection.outlook.com' -or $endpoint.Host.EndsWith('.ps.compliance.protection.outlook.com', [StringComparison]::OrdinalIgnoreCase)
+    } else { $endpoint.Host -eq 'outlook.office365.com' }
+    if ($endpoint.Scheme -cne 'https' -or $endpoint.Port -ne 443 -or $endpoint.UserInfo -or $endpoint.Fragment -or -not $validHost -or
+        ([datetimeoffset]$connection.TokenExpiryTimeUTC) -le [datetimeoffset]::UtcNow) { throw 'Inactive or unexpected native endpoint.' }
+  } catch { throw (New-AuditTargetGuardException -Message "Cannot verify the expected tenant, operator and active $Service session; no mutation is permitted.") }
 }
 
 function Connect-ExchangeForBootstrap {
   $upn = Get-AzCliUserPrincipalName
-
+  $tokenUnavailable = $false
+  try { $outlookToken = Get-AzCliAccessToken -ResourceUrl 'https://outlook.office365.com' }
+  catch {
+    # A failed CLI token read may use the existing browser path. A returned
+    # token with wrong or malformed context must never trigger that fallback.
+    if (-not $_.Exception.Data['AuditTokenUnavailable']) { throw }
+    $tokenUnavailable = $true
+  }
   try {
-    $outlookToken = Get-AzCliAccessToken -ResourceUrl 'https://outlook.office365.com'
-    Connect-ExchangeOnline -AccessToken $outlookToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
+    if ($tokenUnavailable) { throw 'Cached Outlook token unavailable.' }
+    Connect-ExchangeOnline -AccessToken $outlookToken -UserPrincipalName $upn -ShowBanner:$false -ErrorAction Stop | Out-Null
   }
   catch {
-    Write-Warning "Exchange Online access-token auth was unavailable. Trying the normal cached account or browser sign-in for '$upn'."
+    Write-Warning 'Exchange Online access-token connection failed. Trying the normal cached account or browser sign-in.'
+    $null = Assert-AuditOperatorTarget
     try {
-      Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false | Out-Null
+      Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false -ErrorAction Stop | Out-Null
     }
-    catch {
-      throw "Exchange Online cached or browser sign-in for '$upn' could not complete. Review the selected account and interactive authentication state."
-    }
+    catch { throw 'Exchange Online cached or browser sign-in could not complete. Review the selected account and interactive authentication state.' }
   }
+  Assert-AuditNativeContext -Service Exchange
 }
 
 function Connect-ComplianceForBootstrap {
@@ -78,23 +117,27 @@ function Connect-ComplianceForBootstrap {
 
   $upn = Get-AzCliUserPrincipalName
   $complianceToken = Get-AzCliAccessToken -ResourceUrl 'https://ps.compliance.protection.outlook.com'
-
+  $connected = $false
   try {
-    Connect-IPPSSession -AccessToken $complianceToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
-    return $true
+    Connect-IPPSSession -AccessToken $complianceToken -UserPrincipalName $upn -CommandName @('Get-UnifiedAuditLogRetentionPolicy', 'New-UnifiedAuditLogRetentionPolicy') -ShowBanner:$false -ErrorAction Stop | Out-Null
+    $connected = $true
   }
-  catch {
-    Write-Warning "Security & Compliance PowerShell access-token auth with UserPrincipalName failed. Retrying with Organization. Error: $($_.Exception.Message)"
-  }
+  catch { Write-Warning 'Security & Compliance access-token connection failed. Retrying the existing Organization fallback.' }
 
-  try {
-    Connect-IPPSSession -AccessToken $complianceToken -Organization $Organization -ShowBanner:$false | Out-Null
-    return $true
+  if (-not $connected) {
+    $null = Assert-AuditOperatorTarget
+    try {
+      Connect-IPPSSession -AccessToken $complianceToken -Organization $Organization -CommandName @('Get-UnifiedAuditLogRetentionPolicy', 'New-UnifiedAuditLogRetentionPolicy') -ShowBanner:$false -ErrorAction Stop | Out-Null
+      $connected = $true
+    }
+    catch {
+      Write-Warning 'Security & Compliance access-token connection failed; retention bootstrap remains unavailable.'
+      return $false
+    }
   }
-  catch {
-    Write-Warning "Security & Compliance PowerShell access-token auth failed: $($_.Exception.Message)"
-    return $false
-  }
+  # Context mismatch is fatal even when authentication reported success.
+  Assert-AuditNativeContext -Service Compliance
+  return $true
 }
 
 function Get-ExchangeOrganizationDomain {
@@ -114,6 +157,7 @@ function Get-ExchangeOrganizationDomain {
     }
   }
   catch {
+    if ($_.Exception.Data['AuditTargetGuard']) { throw }
     Write-Warning "Graph domain lookup failed: $($_.Exception.Message)"
   }
 
@@ -174,6 +218,7 @@ function Ensure-ExchangeServicePrincipal {
     } | Select-Object -First 1)
 
   if ($existingSp.Count -eq 0) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'New-ServicePrincipal'
     New-ServicePrincipal -AppId $ManagedIdentityAppId -ObjectId $ManagedIdentityObjectId -DisplayName 'exchange-auditing-automation' | Out-Null
   }
 }
@@ -184,26 +229,31 @@ function Ensure-MailboxAuditingRole {
   $allowedCommands = @('Get-Mailbox', 'Get-MailboxAuditBypassAssociation', 'Set-Mailbox')
 
   if (-not (Get-ManagementRole -Identity $roleName -ErrorAction SilentlyContinue)) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'New-ManagementRole'
     New-ManagementRole -Name $roleName -Parent 'Audit Logs' | Out-Null
   }
 
   $entries = @(Get-ManagementRoleEntry "$roleName\*" -ErrorAction Stop)
   foreach ($entry in $entries) {
     if ($entry.Name -notin $allowedCommands) {
+      Assert-AuditNativeContext -Service Exchange -CommandName 'Remove-ManagementRoleEntry'
       Remove-ManagementRoleEntry -Identity "$roleName\$($entry.Name)" -Confirm:$false | Out-Null
     }
   }
 
   foreach ($commandName in @('Get-Mailbox', 'Get-MailboxAuditBypassAssociation')) {
     if (-not (Get-ManagementRoleEntry "$roleName\$commandName" -ErrorAction SilentlyContinue)) {
+      Assert-AuditNativeContext -Service Exchange -CommandName 'Add-ManagementRoleEntry'
       Add-ManagementRoleEntry -Identity "$roleName\$commandName" | Out-Null
     }
   }
 
   if (Get-ManagementRoleEntry "$roleName\Set-Mailbox" -ErrorAction SilentlyContinue) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'Remove-ManagementRoleEntry'
     Remove-ManagementRoleEntry -Identity "$roleName\Set-Mailbox" -Confirm:$false | Out-Null
   }
 
+  Assert-AuditNativeContext -Service Exchange -CommandName 'Add-ManagementRoleEntry'
   Add-ManagementRoleEntry -Identity "$roleName\Set-Mailbox" -Parameters $allowedSetMailboxParameters | Out-Null
 }
 
@@ -214,6 +264,7 @@ function Ensure-RoleGroupMembership {
   $roleName = 'Mailbox Auditing'
 
   if (-not (Get-RoleGroup -Identity $roleGroupName -ErrorAction SilentlyContinue)) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'New-RoleGroup'
     New-RoleGroup `
       -Name $roleGroupName `
       -Description 'Limited scope for Azure Automation to set Advanced Auditing entries' `
@@ -234,6 +285,7 @@ function Ensure-RoleGroupMembership {
   ).Count -gt 0
 
   if (-not $memberExists) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'Add-RoleGroupMember'
     Add-RoleGroupMember -Identity $roleGroupName -Member $ManagedIdentityObjectId -Confirm:$false | Out-Null
 
     $members = @(Get-RoleGroupMember -Identity $roleGroupName -ResultSize Unlimited)
@@ -260,6 +312,7 @@ function Ensure-AuditRetentionPolicy {
   )
 
   if (-not (Get-UnifiedAuditLogRetentionPolicy -Identity $PolicyName -ErrorAction SilentlyContinue)) {
+    Assert-AuditNativeContext -Service Compliance -CommandName 'New-UnifiedAuditLogRetentionPolicy'
     New-UnifiedAuditLogRetentionPolicy `
       -Name $PolicyName `
       -Description 'One year retention policy for all audit records' `
@@ -294,6 +347,7 @@ function Ensure-AuditRetentionPolicy {
 Write-Section -Message 'Loading azd environment values'
 $azdValues = Get-AzdEnvironmentValues
 $subscriptionId = Get-ValueFromEnvironment -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $azdValues
+$null = Assert-AuditOperatorTarget -SubscriptionId $subscriptionId
 $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $azdValues
 $automationAccountName = Get-ValueFromEnvironment -Name 'AUTOMATION_ACCOUNT_NAME' -AzdValues $azdValues
 $managedIdentityObjectId = Get-ValueFromEnvironment -Name 'AUTOMATION_PRINCIPAL_ID' -AzdValues $azdValues
@@ -312,7 +366,7 @@ $accountId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automati
 $accountJson = & az automation account show --subscription $subscriptionId --resource-group $resourceGroupName --name $automationAccountName --only-show-errors -o json
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) { throw 'Could not verify the provisioned Automation account.' }
 $jobScheduleUri = 'https://management.azure.com{0}/jobSchedules/{1}?api-version=2023-11-01' -f $accountId, $jobScheduleId
-$jobScheduleJson = & az rest --method GET --uri $jobScheduleUri --only-show-errors -o json
+$jobScheduleJson = & az rest --subscription $subscriptionId --method GET --uri $jobScheduleUri --only-show-errors -o json
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($jobScheduleJson)) { throw 'Could not verify the provisioned Automation jobSchedule.' }
 Assert-AuditOwnershipReceiptTarget -ExpectedAccountId $accountId -ExpectedPrincipalId $managedIdentityObjectId -ExpectedJobScheduleId $jobScheduleId `
   -Account ($accountJson | ConvertFrom-Json -ErrorAction Stop) -JobSchedule ($jobScheduleJson | ConvertFrom-Json -ErrorAction Stop)
@@ -338,6 +392,7 @@ $degradedConditions = [System.Collections.Generic.List[string]]::new()
 Write-Section -Message 'Configuring audit prerequisites'
 $adminAuditConfig = Get-AdminAuditLogConfig
 if (-not $adminAuditConfig.UnifiedAuditLogIngestionEnabled) {
+  Assert-AuditNativeContext -Service Exchange -CommandName 'Set-AdminAuditLogConfig'
   Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true
 
   $adminAuditConfig = Get-AdminAuditLogConfig
@@ -358,6 +413,7 @@ if ($complianceConnected) {
   try {
     Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
   } catch {
+    if ($_.Exception.Data['AuditTargetGuard']) { throw }
     if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
     throw
   }
@@ -427,6 +483,7 @@ try {
     -RunbookName 'Enable-AdvancedAuditing' | Out-Null
 }
 catch {
+  if ($_.Exception.Data['AuditTargetGuard']) { throw }
   $runbookFailures.Add("Advanced auditing remediation failed: $($_.Exception.Message)")
   Write-Warning $runbookFailures[$runbookFailures.Count - 1]
 }
@@ -440,6 +497,7 @@ try {
     -RunbookName $validateConfigurationRunbookName | Out-Null
 }
 catch {
+  if ($_.Exception.Data['AuditTargetGuard']) { throw }
   $runbookFailures.Add("Advanced auditing validation failed: $($_.Exception.Message)")
   Write-Warning $runbookFailures[$runbookFailures.Count - 1]
 }

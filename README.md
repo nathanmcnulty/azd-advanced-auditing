@@ -14,15 +14,18 @@ This template helps an administrator:
 
 ## Quickstart
 
-Install [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Azure CLI, and PowerShell 7. Use an operator who can deploy Azure Automation, configure Exchange and Purview auditing, and perform the required Azure/Exchange assignments. Some environments already have the required Microsoft Graph permissions consented. If Graph consent has not been completed previously, the deployment may require a **Global Administrator or Privileged Role Administrator**.
+Install [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Azure CLI, and PowerShell 7.6 or later. Use an operator who can deploy Azure Automation, configure Exchange and Purview auditing, and perform the required Azure/Exchange assignments. Some environments already have the required Microsoft Graph permissions consented. If Graph consent has not been completed previously, the deployment may require a **Global Administrator or Privileged Role Administrator**.
 
 From a new empty directory, run:
 
 ```powershell
-azd init -t nathanmcnulty/azd-advanced-auditing && azd up
+azd init -t nathanmcnulty/azd-advanced-auditing
+azd env set AZURE_SUBSCRIPTION_ID "<expected-subscription-guid>"
+azd env set AZURE_TENANT_ID "<expected-tenant-guid>"
+azd up
 ```
 
-The hooks reuse normal cached or browser authentication. The deployment installs ExchangeOnlineManagement 3.10.1 or later for the current user when needed; administrators do not need Node.js or a local application build toolchain.
+The hooks require the selected environment’s explicit subscription and tenant, verify fresh ARM subscription state before each operator write, and leave the global Azure CLI default unchanged. Conflicting process and environment selectors stop the hook. The hooks reuse normal cached or browser authentication. The deployment installs ExchangeOnlineManagement 3.10.1 or later for the current user when needed; administrators do not need Node.js or a local application build toolchain.
 
 ## What gets deployed
 

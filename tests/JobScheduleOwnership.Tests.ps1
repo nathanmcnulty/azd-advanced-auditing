@@ -79,6 +79,8 @@ Describe 'Exchange bootstrap fallback' {
   It 'uses the selected UPN and no device flow when token connection fails' {
     & {
       . $script:connectDefinition
+      function Assert-AuditOperatorTarget {}
+      function Assert-AuditNativeContext { param($Service) }
       function Get-AzCliUserPrincipalName { 'operator@example.com' }
       function Get-AzCliAccessToken { 'offline-token' }
       function Connect-ExchangeOnline {
@@ -95,6 +97,8 @@ Describe 'Exchange bootstrap fallback' {
   It 'reports a blocker if normal cached or browser sign-in cannot complete' {
     & {
       . $script:connectDefinition
+      function Assert-AuditOperatorTarget {}
+      function Assert-AuditNativeContext { param($Service) }
       function Get-AzCliUserPrincipalName { 'operator@example.com' }
       function Get-AzCliAccessToken { 'offline-token' }
       function Connect-ExchangeOnline { throw 'offline auth unavailable' }
@@ -105,8 +109,10 @@ Describe 'Exchange bootstrap fallback' {
   It 'falls back to standard account sign-in if Azure CLI cannot issue an Outlook token' {
     & {
       . $script:connectDefinition
+      function Assert-AuditOperatorTarget {}
+      function Assert-AuditNativeContext { param($Service) }
       function Get-AzCliUserPrincipalName { 'operator@example.com' }
-      function Get-AzCliAccessToken { throw 'token unavailable' }
+      function Get-AzCliAccessToken { $errorRecord=[InvalidOperationException]::new('token unavailable'); $errorRecord.Data['AuditTokenUnavailable']=$true; throw $errorRecord }
       function Connect-ExchangeOnline {
         param([string]$AccessToken, [string]$UserPrincipalName, [bool]$ShowBanner, [switch]$Device)
         $script:fallbackParameters = @{} + $PSBoundParameters
@@ -122,19 +128,20 @@ Describe 'Exchange bootstrap fallback' {
 Describe 'Preprovision preserves existing schedule linkage' {
   BeforeAll {
     $script:hookPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/preprovision.ps1'
-    $script:accountId = '/subscriptions/sub-1/resourceGroups/rg-offline/providers/Microsoft.Automation/automationAccounts/aaauditoffline'
+    $script:accountId = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-offline/providers/Microsoft.Automation/automationAccounts/aaauditoffline'
     $script:principalId = '11111111-1111-1111-1111-111111111111'
     $script:scheduleId = '22222222-2222-2222-2222-222222222222'
   }
 
   It 'leaves the prior linkage and lock intact before a failed ARM redeployment' {
     & {
-      $names = @('AZURE_ENV_NAME','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
+      $names = @('AZURE_ENV_NAME','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
       $saved = @{}
       foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
       try {
         [Environment]::SetEnvironmentVariable('AZURE_ENV_NAME', 'offline')
-        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', 'sub-1')
+        [Environment]::SetEnvironmentVariable('AZURE_TENANT_ID', '22222222-2222-2222-2222-222222222222')
+        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', '11111111-1111-1111-1111-111111111111')
         [Environment]::SetEnvironmentVariable('AZURE_RESOURCE_GROUP', 'rg-offline')
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_ACCOUNT_ID', $script:accountId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_PRINCIPAL_ID', $script:principalId)
@@ -148,14 +155,21 @@ Describe 'Preprovision preserves existing schedule linkage' {
           if ($args[0] -eq 'env' -and $args[1] -eq 'set') { $global:LASTEXITCODE = 0; return }
           throw "Unexpected azd command: $($args -join ' ')"
         }
+        function Invoke-RestMethod {
+          param($Method,$Uri,$Headers,$MaximumRedirection,$TimeoutSec)
+          if ($Method -ne 'Get' -or $Uri -ne 'https://management.azure.com/subscriptions/11111111-1111-1111-1111-111111111111?api-version=2022-12-01') { throw 'Unexpected HTTP request.' }
+          [pscustomobject]@{id='/subscriptions/11111111-1111-1111-1111-111111111111';subscriptionId='11111111-1111-1111-1111-111111111111';tenantId='22222222-2222-2222-2222-222222222222';state='Enabled'}
+        }
         function az {
           $command = $args -join ' '
           $global:testAzureCalls.Add($command)
           $global:LASTEXITCODE = 0
+          if ($command -like 'account show --subscription 11111111-1111-1111-1111-111111111111 *') { return '{"id":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222","environmentName":"AzureCloud","user":{"name":"operator@example.test","type":"user"}}' }
+          if ($command -like 'account get-access-token --subscription 11111111-1111-1111-1111-111111111111 *') { return '{"subscription":"11111111-1111-1111-1111-111111111111","tenant":"22222222-2222-2222-2222-222222222222","accessToken":"fixture"}' }
           if ($command -like 'group exists *') { return 'true' }
           if ($command -like 'automation account list *') { return '[{"name":"aaauditoffline"}]' }
           if ($command -like 'automation account show *') { return ('{{"id":"{0}","identity":{{"principalId":"{1}"}}}}' -f $global:testAccountId,$global:testPrincipalId) }
-          if ($command -like 'rest --method GET *') { return ('{{"value":[{{"name":"{0}","properties":{{"jobScheduleId":"{0}","schedule":{{"name":"advanced-auditing-daily"}},"runbook":{{"name":"Enable-AdvancedAuditing"}}}}}}]}}' -f $global:testScheduleId) }
+          if ($command -like 'rest --subscription * --method GET *') { return ('{{"value":[{{"name":"{0}","properties":{{"jobScheduleId":"{0}","schedule":{{"name":"advanced-auditing-daily"}},"runbook":{{"name":"Enable-AdvancedAuditing"}}}}}}]}}' -f $global:testScheduleId) }
           throw "Unexpected Azure command: $command"
         }
         & $script:hookPath
@@ -173,12 +187,13 @@ Describe 'Preprovision preserves existing schedule linkage' {
 
   It 'rejects a mismatched receipt before any Azure mutation' {
     & {
-      $names = @('AZURE_ENV_NAME','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
+      $names = @('AZURE_ENV_NAME','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
       $saved = @{}
       foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
       try {
         [Environment]::SetEnvironmentVariable('AZURE_ENV_NAME', 'offline')
-        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', 'sub-1')
+        [Environment]::SetEnvironmentVariable('AZURE_TENANT_ID', '22222222-2222-2222-2222-222222222222')
+        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', '11111111-1111-1111-1111-111111111111')
         [Environment]::SetEnvironmentVariable('AZURE_RESOURCE_GROUP', 'rg-offline')
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_ACCOUNT_ID', $script:accountId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_PRINCIPAL_ID', '99999999-9999-9999-9999-999999999999')
@@ -192,14 +207,21 @@ Describe 'Preprovision preserves existing schedule linkage' {
           if ($args[0] -eq 'env' -and $args[1] -eq 'set') { $global:LASTEXITCODE = 0; return }
           throw "Unexpected azd command: $($args -join ' ')"
         }
+        function Invoke-RestMethod {
+          param($Method,$Uri,$Headers,$MaximumRedirection,$TimeoutSec)
+          if ($Method -ne 'Get' -or $Uri -ne 'https://management.azure.com/subscriptions/11111111-1111-1111-1111-111111111111?api-version=2022-12-01') { throw 'Unexpected HTTP request.' }
+          [pscustomobject]@{id='/subscriptions/11111111-1111-1111-1111-111111111111';subscriptionId='11111111-1111-1111-1111-111111111111';tenantId='22222222-2222-2222-2222-222222222222';state='Enabled'}
+        }
         function az {
           $command = $args -join ' '
           $global:testAzureCalls.Add($command)
           $global:LASTEXITCODE = 0
+          if ($command -like 'account show --subscription 11111111-1111-1111-1111-111111111111 *') { return '{"id":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222","environmentName":"AzureCloud","user":{"name":"operator@example.test","type":"user"}}' }
+          if ($command -like 'account get-access-token --subscription 11111111-1111-1111-1111-111111111111 *') { return '{"subscription":"11111111-1111-1111-1111-111111111111","tenant":"22222222-2222-2222-2222-222222222222","accessToken":"fixture"}' }
           if ($command -like 'group exists *') { return 'true' }
           if ($command -like 'automation account list *') { return '[{"name":"aaauditoffline"}]' }
           if ($command -like 'automation account show *') { return ('{{"id":"{0}","identity":{{"principalId":"{1}"}}}}' -f $global:testAccountId,$global:testPrincipalId) }
-          if ($command -like 'rest --method GET *') { return ('{{"value":[{{"name":"{0}","properties":{{"jobScheduleId":"{0}","schedule":{{"name":"advanced-auditing-daily"}},"runbook":{{"name":"Enable-AdvancedAuditing"}}}}}}]}}' -f $global:testScheduleId) }
+          if ($command -like 'rest --subscription * --method GET *') { return ('{{"value":[{{"name":"{0}","properties":{{"jobScheduleId":"{0}","schedule":{{"name":"advanced-auditing-daily"}},"runbook":{{"name":"Enable-AdvancedAuditing"}}}}}}]}}' -f $global:testScheduleId) }
           throw "Unexpected Azure command: $command"
         }
         { & $script:hookPath } | Should -Throw '*receipt does not match*'

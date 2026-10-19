@@ -24,6 +24,35 @@ These delegated Graph permissions are a separate consent boundary. Security Admi
 
 The runtime managed identity receives the limited Exchange authority required by the runbooks. Failed jobs print their available output streams and exception details before provisioning exits.
 
+## Operator target checks
+
+Set `AZURE_SUBSCRIPTION_ID` and `AZURE_TENANT_ID` in the selected azd environment
+before running the hooks, including teardown. Operator hooks require public-cloud,
+user-account context. They validate explicit selectors, scoped token metadata and
+fresh ARM subscription identity, tenant and case-sensitive `Enabled` state. The
+first successful target and actor are pinned for that hook invocation; context
+drift, failed reads and malformed metadata stop subsequent writes. Cached
+`az account show` state alone is not accepted. No global CLI default is changed.
+
+Each persistent azd value, Graph request, Automation variable/content/publication/
+job mutation and lock deletion checks the selected target. Exchange and Purview
+mutation boundaries additionally verify native session identity, active state and
+public-cloud endpoint and command-to-session module ownership, including after the existing normal browser/organization
+fallbacks. Purview imports only the two retention commands so its shared role
+commands cannot replace the Exchange commands. Authentication unavailability still leaves retention degraded; target
+or session mismatch is a fatal safety failure rather than an authentication
+workaround. Hosted managed-identity runbooks are unchanged and require no new
+subscription Reader grant.
+
+The small solution-owned `hooks/AuditOperatorTarget.ps1` adapts the reviewed
+[canonical operator guard](https://github.com/nathanmcnulty/azd-reference/blob/59522c4ebeb5b8fda8bc53c59959dd825ddfa4be/components/powershell/security-automation-runtime/Azd.SecurityAutomation.psm1).
+No unrelated runtime/host component or cross-repository runtime fetch is added.
+The existing immutable component pins, permissions and deployment defaults remain
+unchanged. Native session fields follow Microsoft's
+[Get-ConnectionInformation contract](https://learn.microsoft.com/powershell/module/exchangepowershell/get-connectioninformation).
+Offline tripwire tests establish source behavior only; the supported-platform
+Exchange/Purview acceptance gates and prior failed probe evidence remain open.
+
 ## Product coverage
 
 | Area | Coverage |

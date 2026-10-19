@@ -11,6 +11,7 @@ Write-Section -Message 'Preparing azd environment values'
 Ensure-Command -Name 'az'
 Ensure-Command -Name 'azd'
 
+$target = Assert-AuditOperatorTarget
 $names = Get-AuditTemplateNames
 Set-AzdEnvironmentValue -Name 'AZURE_RESOURCE_GROUP' -Value $names.ResourceGroupName
 Set-AzdEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.AutomationAccountName
@@ -18,7 +19,7 @@ Set-AzdEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.Automation
 $deploymentTimestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 Set-AzdEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp
 
-$subscriptionId = [System.Environment]::GetEnvironmentVariable('AZURE_SUBSCRIPTION_ID')
+$subscriptionId = $target.SubscriptionId
 $resourceGroupName = $names.ResourceGroupName
 $automationAccountName = $names.AutomationAccountName
 $azdValues = Get-AzdEnvironmentValues
@@ -43,7 +44,7 @@ if ($groupExists -eq 'true') {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) { throw 'Could not inspect the existing Automation account.' }
     $account = $accountJson | ConvertFrom-Json -ErrorAction Stop
     $listUri = 'https://management.azure.com{0}/jobSchedules?api-version=2023-11-01' -f $expectedAccountId
-    $listJson = & az rest --method GET --uri $listUri --only-show-errors -o json
+    $listJson = & az rest --subscription $subscriptionId --method GET --uri $listUri --only-show-errors -o json
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($listJson)) { throw 'Could not inspect live Automation jobSchedules.' }
     $listResponse = $listJson | ConvertFrom-Json -ErrorAction Stop
     if ($listResponse.PSObject.Properties.Match('value').Count -eq 0 -or $null -eq $listResponse.value) { throw 'Automation jobSchedule listing had no value array.' }
