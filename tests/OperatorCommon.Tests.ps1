@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 Describe 'Auditing Common operator integration' {
 BeforeAll {
   $script:repoRoot = Split-Path $PSScriptRoot -Parent

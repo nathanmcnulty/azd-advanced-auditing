@@ -15,7 +15,7 @@
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "46020d05841388d68bdf191a078da3230c081472e86e7ead6e65b5286354cde9"
+          "sha256": "4b4eba9fe86a5e7f261ee5d4093729e21277eb9d3040e0034390100620fae748"
         }
       ],
       "feature": "baseline-deployment",
@@ -33,11 +33,11 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "f3c23bdd71b0385cb6de5a00a23561dab1a9fb9ba721c27b61098576a24827e8"
+          "sha256": "be904b94657f7069edc40d571f5487d46082e4eb03cc0a011988623bbd140db2"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
+          "sha256": "86f8a8b22b5b0ecfb6ba341d00d21aeb908a02b0d8be32b8794fca66ac1bdab2"
         }
       ],
       "feature": "mailbox-auditing",
@@ -55,11 +55,11 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "f3c23bdd71b0385cb6de5a00a23561dab1a9fb9ba721c27b61098576a24827e8"
+          "sha256": "be904b94657f7069edc40d571f5487d46082e4eb03cc0a011988623bbd140db2"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
+          "sha256": "86f8a8b22b5b0ecfb6ba341d00d21aeb908a02b0d8be32b8794fca66ac1bdab2"
         }
       ],
       "feature": "mailbox-auditing",
