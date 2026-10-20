@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 Describe 'Advanced auditing template' {
   BeforeAll {
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent

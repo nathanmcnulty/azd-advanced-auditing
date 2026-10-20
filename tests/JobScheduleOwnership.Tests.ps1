@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 Describe 'Automation jobSchedule ownership' {
   BeforeAll {
     . (Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/JobScheduleOwnership.ps1')

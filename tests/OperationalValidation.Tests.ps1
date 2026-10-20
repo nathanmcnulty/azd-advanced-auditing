@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 function global:az { throw 'Offline fixture forbids any native Azure CLI fallback.' }
 foreach($name in @('Invoke-WebRequest','Invoke-RestMethod','Connect-ExchangeOnline','Connect-IPPSSession','Connect-MgGraph','Connect-AzAccount')){
     Set-Item ('Function:global:'+$name) -Value {throw 'Offline fixture forbids any HTTP/auth/Exchange provider fallback.'}

@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 BeforeAll {
     foreach($name in @('az','Invoke-WebRequest','Invoke-RestMethod','Connect-ExchangeOnline','Connect-IPPSSession','Connect-MgGraph','Connect-AzAccount')){Set-Item ('Function:global:'+$name) -Value {throw 'Offline fixture forbids native/provider fallback.'}}
     $source=Get-Content "$PSScriptRoot/../hooks/postprovision.ps1" -Raw

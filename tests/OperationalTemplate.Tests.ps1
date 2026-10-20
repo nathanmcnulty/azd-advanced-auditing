@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 Describe 'Actual compiled optional monitoring resources' {
     BeforeAll {
         $root=Split-Path $PSScriptRoot -Parent
