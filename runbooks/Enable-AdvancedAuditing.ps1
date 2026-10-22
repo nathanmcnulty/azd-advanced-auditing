@@ -78,7 +78,7 @@ $auditAdminActions = @(
   'SendAs', 'SendOnBehalf', 'MessageBind', 'Create', 'UpdateFolderPermissions',
   'AddFolderPermissions', 'ModifyFolderPermissions', 'RemoveFolderPermissions',
   'UpdateInboxRules', 'UpdateCalendarDelegation', 'RecordDelete', 'ApplyRecord',
-  'MailItemsAccessed', 'UpdateComplianceTag', 'Send', 'AttachmentAccess',
+  'MailItemsAccessed', 'UpdateComplianceTag', 'Send',
   'PriorityCleanupDelete', 'ApplyPriorityCleanup', 'PreservedMailItemProactively'
 )
 
@@ -86,7 +86,7 @@ $auditDelegateActions = @(
   'Update', 'Move', 'MoveToDeletedItems', 'SoftDelete', 'HardDelete', 'FolderBind',
   'SendAs', 'SendOnBehalf', 'Create', 'UpdateFolderPermissions', 'AddFolderPermissions',
   'ModifyFolderPermissions', 'RemoveFolderPermissions', 'UpdateInboxRules', 'RecordDelete',
-  'ApplyRecord', 'MailItemsAccessed', 'UpdateComplianceTag', 'AttachmentAccess',
+  'ApplyRecord', 'MailItemsAccessed', 'UpdateComplianceTag',
   'PriorityCleanupDelete', 'ApplyPriorityCleanup', 'PreservedMailItemProactively'
 )
 
@@ -95,7 +95,7 @@ $auditOwnerActions = @(
   'UpdateFolderPermissions', 'AddFolderPermissions', 'ModifyFolderPermissions',
   'RemoveFolderPermissions', 'UpdateInboxRules', 'UpdateCalendarDelegation', 'RecordDelete',
   'ApplyRecord', 'MailItemsAccessed', 'UpdateComplianceTag', 'Send', 'SearchQueryInitiated',
-  'AttachmentAccess', 'PriorityCleanupDelete', 'ApplyPriorityCleanup',
+  'PriorityCleanupDelete', 'ApplyPriorityCleanup',
   'PreservedMailItemProactively'
 )
 

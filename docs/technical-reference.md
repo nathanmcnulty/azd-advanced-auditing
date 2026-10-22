@@ -72,6 +72,15 @@ An existing account without a receipt stops before deployment. For a legacy temp
 
 The main runbook is based on the public [Enable-AdvancedAuditing.ps1](https://github.com/nathanmcnulty/nathanmcnulty/blob/master/ExchangeOnline/Enable-AdvancedAuditing.ps1) and reads the Exchange organization from an Automation variable. Remediation and validation use aligned mailbox-action lists and report bypass associations.
 
+`AttachmentAccess` is excluded from the configurable action lists. Microsoft
+[documents this operation](https://learn.microsoft.com/purview/audit-mailboxes#mailbox-actions-for-user-mailboxes-and-shared-mailboxes)
+as enabled by default and not configurable with the other mailbox actions.
+Remediation does not pass it to `Set-Mailbox`, and configuration validation does
+not require it in the returned `AuditAdmin`, `AuditDelegate`, or `AuditOwner`
+properties. This does not verify that attachment-access events are generated,
+ingested, or retained, and does not establish a fix for the historical
+managed-identity `CmdletNeedsProxyException`.
+
 ## Supported-platform retest
 
 An older environment validated Azure deployment, schedule timing, domain lookup, URI interpolation, job-schedule linkage, and Exchange role-group handling. Its PowerShell 7.4 runtime with ExchangeOnlineManagement 3.10.1 successfully connected through managed identity but failed `Set-Mailbox` with `CmdletNeedsProxyException`.

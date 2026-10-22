@@ -37,7 +37,7 @@
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "86f8a8b22b5b0ecfb6ba341d00d21aeb908a02b0d8be32b8794fca66ac1bdab2"
+          "sha256": "f43fa1ced818783b4edf01299b1a09b791b75ea28a74476955c3aaa5dd5e292f"
         }
       ],
       "feature": "mailbox-auditing",
@@ -59,7 +59,7 @@
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "86f8a8b22b5b0ecfb6ba341d00d21aeb908a02b0d8be32b8794fca66ac1bdab2"
+          "sha256": "f43fa1ced818783b4edf01299b1a09b791b75ea28a74476955c3aaa5dd5e292f"
         }
       ],
       "feature": "mailbox-auditing",
