@@ -55,6 +55,102 @@ Describe 'Advanced auditing template' {
   }
 }
 
+Describe 'Validation runbook output privacy' {
+  BeforeAll {
+    $repoRoot = Split-Path -Path $PSScriptRoot -Parent
+    $managedIdentityRunbookPath = Join-Path $repoRoot 'runbooks\Validate-ExchangeManagedIdentity.ps1'
+    $configurationRunbookPath = Join-Path $repoRoot 'runbooks\Validate-AdvancedAuditingConfiguration.ps1'
+    $tokens = $null
+    $parseErrors = $null
+    $configurationAst = [Management.Automation.Language.Parser]::ParseFile(
+      $configurationRunbookPath,
+      [ref]$tokens,
+      [ref]$parseErrors
+    )
+    if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+
+    $helperAsts = @($configurationAst.FindAll({
+      param($node)
+      $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @('Test-ContainsAll', 'Get-AdvancedAuditingFailureSummary')
+    }, $true))
+    $containsAllAst = $helperAsts | Where-Object Name -eq 'Test-ContainsAll' | Select-Object -First 1
+    $summaryAst = $helperAsts | Where-Object Name -eq 'Get-AdvancedAuditingFailureSummary' | Select-Object -First 1
+    if (-not $containsAllAst -or -not $summaryAst) { throw 'Validation summary helpers were not found.' }
+    $script:validationSummaryHelpers = [scriptblock]::Create(
+      $containsAllAst.Extent.Text + [Environment]::NewLine + $summaryAst.Extent.Text
+    )
+  }
+
+  It 'does not include mailbox identifiers in the managed identity success message' {
+    $source = Get-Content -Path $managedIdentityRunbookPath -Raw
+
+    $source | Should -Match "Managed identity connection succeeded; a user mailbox was returned\."
+    $source | Should -Not -Match 'PrimarySmtpAddress'
+  }
+
+  It 'summarizes configuration failures using bounded counts instead of identifiers' {
+    . $script:validationSummaryHelpers
+    $mailboxes = @(
+      [pscustomobject]@{
+        PrimarySmtpAddress = 'private.first@example.invalid'
+        AuditEnabled = $false
+        AuditLogAgeLimit = [timespan]::FromDays(30)
+        AuditAdmin = @()
+        AuditDelegate = @()
+        AuditOwner = @()
+      }
+      [pscustomobject]@{
+        PrimarySmtpAddress = 'private.second@example.invalid'
+        AuditEnabled = $false
+        AuditLogAgeLimit = [timespan]::FromDays(90)
+        AuditAdmin = @()
+        AuditDelegate = @()
+        AuditOwner = @()
+      }
+    )
+    $bypassAssociations = @(
+      [pscustomobject]@{ Identity = 'private.bypass@example.invalid'; AuditBypassEnabled = $true }
+    )
+    $summary = @(Get-AdvancedAuditingFailureSummary -Mailboxes $mailboxes -BypassAssociations $bypassAssociations `
+      -ExpectedAdmin @('AdminAction') -ExpectedDelegate @('DelegateAction') -ExpectedOwner @('OwnerAction'))
+    $summaryText = $summary -join '; '
+
+    $summaryText | Should -Match 'Mailbox audit bypass enabled for 1 association\(s\)'
+    $summaryText | Should -Match 'AuditEnabled=false for 2 user mailbox\(es\)'
+    $summaryText | Should -Match 'AuditLogAgeLimit below 365 days for 2 user mailbox\(es\)'
+    $summaryText | Should -Match 'Missing expected AuditAdmin entries for 2 user mailbox\(es\)'
+    $summaryText | Should -Match 'Missing expected AuditDelegate entries for 2 user mailbox\(es\)'
+    $summaryText | Should -Match 'Missing expected AuditOwner entries for 2 user mailbox\(es\)'
+    $summaryText | Should -Not -Match 'private\.(first|second|bypass)@example\.invalid'
+  }
+
+  It 'returns no failure categories for compliant mailbox settings' {
+    . $script:validationSummaryHelpers
+    $mailboxes = @(
+      [pscustomobject]@{
+        AuditEnabled = $true
+        AuditLogAgeLimit = [timespan]::FromDays(365)
+        AuditAdmin = @('AdminAction')
+        AuditDelegate = @('DelegateAction')
+        AuditOwner = @('OwnerAction')
+      }
+    )
+    $summary = @(Get-AdvancedAuditingFailureSummary -Mailboxes $mailboxes -BypassAssociations @() `
+      -ExpectedAdmin @('AdminAction') -ExpectedDelegate @('DelegateAction') -ExpectedOwner @('OwnerAction'))
+
+    $summary.Count | Should -Be 0
+  }
+
+  It 'formats validation errors without mailbox or bypass identity interpolation' {
+    $source = Get-Content -Path $configurationRunbookPath -Raw
+
+    $source | Should -Match 'Advanced auditing validation failed for \$\(\$mailboxes\.Count\) user mailbox'
+    $source | Should -Not -Match '\$mailbox\.PrimarySmtpAddress'
+    $source | Should -Not -Match '\$bypassAssociation\.(Identity|Name)'
+  }
+}
+
 Describe 'Automation runbook publication' {
   BeforeAll {
     $commonPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1'

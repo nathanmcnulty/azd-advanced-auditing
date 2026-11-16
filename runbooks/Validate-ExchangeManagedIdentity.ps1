@@ -43,7 +43,7 @@ try {
     throw 'No user mailboxes were returned during validation.'
   }
 
-  Write-Output "Managed identity connection succeeded. Sample mailbox: $($mailbox.PrimarySmtpAddress)"
+  Write-Output 'Managed identity connection succeeded; a user mailbox was returned.'
 }
 finally {
   Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue

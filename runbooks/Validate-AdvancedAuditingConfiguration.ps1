@@ -28,7 +28,7 @@ function Get-ExchangeOrganization {
 
 function Test-ContainsAll {
   param(
-    [Parameter(Mandatory = $true)][object[]]$CurrentValues,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$CurrentValues,
     [Parameter(Mandatory = $true)][string[]]$ExpectedValues
   )
 
@@ -39,6 +39,70 @@ function Test-ContainsAll {
   }
 
   return $true
+}
+
+function Get-AdvancedAuditingFailureSummary {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Mailboxes,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$BypassAssociations,
+    [Parameter(Mandatory = $true)][string[]]$ExpectedAdmin,
+    [Parameter(Mandatory = $true)][string[]]$ExpectedDelegate,
+    [Parameter(Mandatory = $true)][string[]]$ExpectedOwner
+  )
+
+  $failureCounts = [ordered]@{
+    MailboxAuditBypassEnabled = $BypassAssociations.Count
+    AuditEnabledFalse = 0
+    AuditLogAgeLimitBelow365Days = 0
+    MissingExpectedAuditAdminEntries = 0
+    MissingExpectedAuditDelegateEntries = 0
+    MissingExpectedAuditOwnerEntries = 0
+  }
+
+  foreach ($mailbox in $Mailboxes) {
+    if (-not [bool]$mailbox.AuditEnabled) {
+      $failureCounts.AuditEnabledFalse++
+    }
+
+    $auditLogAgeLimit = [timespan]$mailbox.AuditLogAgeLimit
+    if ($auditLogAgeLimit.TotalDays -lt 365) {
+      $failureCounts.AuditLogAgeLimitBelow365Days++
+    }
+
+    if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditAdmin) -ExpectedValues $ExpectedAdmin)) {
+      $failureCounts.MissingExpectedAuditAdminEntries++
+    }
+
+    if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditDelegate) -ExpectedValues $ExpectedDelegate)) {
+      $failureCounts.MissingExpectedAuditDelegateEntries++
+    }
+
+    if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditOwner) -ExpectedValues $ExpectedOwner)) {
+      $failureCounts.MissingExpectedAuditOwnerEntries++
+    }
+  }
+
+  $failureSummary = [System.Collections.Generic.List[string]]::new()
+  if ($failureCounts.MailboxAuditBypassEnabled -gt 0) {
+    $failureSummary.Add("Mailbox audit bypass enabled for $($failureCounts.MailboxAuditBypassEnabled) association(s)")
+  }
+  if ($failureCounts.AuditEnabledFalse -gt 0) {
+    $failureSummary.Add("AuditEnabled=false for $($failureCounts.AuditEnabledFalse) user mailbox(es)")
+  }
+  if ($failureCounts.AuditLogAgeLimitBelow365Days -gt 0) {
+    $failureSummary.Add("AuditLogAgeLimit below 365 days for $($failureCounts.AuditLogAgeLimitBelow365Days) user mailbox(es)")
+  }
+  if ($failureCounts.MissingExpectedAuditAdminEntries -gt 0) {
+    $failureSummary.Add("Missing expected AuditAdmin entries for $($failureCounts.MissingExpectedAuditAdminEntries) user mailbox(es)")
+  }
+  if ($failureCounts.MissingExpectedAuditDelegateEntries -gt 0) {
+    $failureSummary.Add("Missing expected AuditDelegate entries for $($failureCounts.MissingExpectedAuditDelegateEntries) user mailbox(es)")
+  }
+  if ($failureCounts.MissingExpectedAuditOwnerEntries -gt 0) {
+    $failureSummary.Add("Missing expected AuditOwner entries for $($failureCounts.MissingExpectedAuditOwnerEntries) user mailbox(es)")
+  }
+
+  return $failureSummary.ToArray()
 }
 
 $exchangeOrganization = Get-ExchangeOrganization -ConfiguredValue $Organization
@@ -90,39 +154,12 @@ try {
     throw 'No user mailboxes were returned during validation.'
   }
 
-  $failures = [System.Collections.Generic.List[string]]::new()
-
   $bypassAssociations = @(Get-MailboxAuditBypassAssociation -ResultSize Unlimited | Where-Object { $_.AuditBypassEnabled -eq $true })
-  foreach ($bypassAssociation in $bypassAssociations) {
-    $bypassIdentity = if ($bypassAssociation.Identity) { [string]$bypassAssociation.Identity } else { [string]$bypassAssociation.Name }
-    $failures.Add("${bypassIdentity}: mailbox audit bypass is enabled")
-  }
+  $failureSummary = @(Get-AdvancedAuditingFailureSummary -Mailboxes $mailboxes -BypassAssociations $bypassAssociations `
+    -ExpectedAdmin $expectedAdmin -ExpectedDelegate $expectedDelegate -ExpectedOwner $expectedOwner)
 
-  foreach ($mailbox in $mailboxes) {
-    if (-not [bool]$mailbox.AuditEnabled) {
-      $failures.Add("$($mailbox.PrimarySmtpAddress): AuditEnabled is false")
-    }
-
-    $auditLogAgeLimit = [timespan]$mailbox.AuditLogAgeLimit
-    if ($auditLogAgeLimit.TotalDays -lt 365) {
-      $failures.Add("$($mailbox.PrimarySmtpAddress): AuditLogAgeLimit is $($auditLogAgeLimit.TotalDays) days, expected at least 365")
-    }
-
-    if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditAdmin) -ExpectedValues $expectedAdmin)) {
-      $failures.Add("$($mailbox.PrimarySmtpAddress): missing expected AuditAdmin entries")
-    }
-
-    if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditDelegate) -ExpectedValues $expectedDelegate)) {
-      $failures.Add("$($mailbox.PrimarySmtpAddress): missing expected AuditDelegate entries")
-    }
-
-    if (-not (Test-ContainsAll -CurrentValues @($mailbox.AuditOwner) -ExpectedValues $expectedOwner)) {
-      $failures.Add("$($mailbox.PrimarySmtpAddress): missing expected AuditOwner entries")
-    }
-  }
-
-  if ($failures.Count -gt 0) {
-    throw ($failures -join [Environment]::NewLine)
+  if ($failureSummary.Count -gt 0) {
+    throw "Advanced auditing validation failed for $($mailboxes.Count) user mailbox(es): $($failureSummary -join '; ')."
   }
 
   Write-Output "Validated complete advanced auditing settings on $($mailboxes.Count) user mailboxes; no audit bypass associations were enabled."
