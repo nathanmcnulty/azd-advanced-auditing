@@ -4,6 +4,8 @@
 
 Review the managed-identity validation, remediation, and complete auditing-validation jobs after every deployment. Confirm ingestion, the retention policy, all expected mailbox action sets, `AuditEnabled`, audit age limits, and the absence of bypass associations.
 
+The validation runbooks report aggregate failure counts and do not include mailbox SMTP addresses or bypass identities in their own success or validation-failure messages. Treat job output as sensitive because diagnostics returned by Exchange can still contain identifiers.
+
 If Security & Compliance authentication is unavailable, the hook completes with an explicit degraded warning. Configure and validate the identified retention policy manually; mailbox remediation and validation failures remain deployment failures.
 
 Reruns reuse the prepared Automation account name and stable job-schedule identifier. Review current job output before repeating a failed tenant operation.
