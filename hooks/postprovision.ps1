@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path -Path $PSScriptRoot -ChildPath 'Common.ps1')
 . (Join-Path -Path $PSScriptRoot -ChildPath 'JobScheduleOwnership.ps1')
+. (Join-Path -Path $PSScriptRoot -ChildPath 'AuditOperationalState.ps1')
 
 function Invoke-GraphRest {
   param(
@@ -346,10 +347,24 @@ if (-not $adminAuditConfig.UnifiedAuditLogIngestionEnabled) {
 }
 
 $retentionPolicyName = 'All Records - 1 Year'
+$operationalAlertsEnabled = $false
+# This optional resource flag must use the deployed azd output, never the
+# process-first environment override used by general bootstrap inputs.
+$operationalAlertsValue = if ($azdValues.ContainsKey('OPERATIONAL_ALERTS_ENABLED')) { $azdValues['OPERATIONAL_ALERTS_ENABLED'] } else { $null }
+if (-not [bool]::TryParse([string]$operationalAlertsValue, [ref]$operationalAlertsEnabled)) {
+  throw 'Deployed OPERATIONAL_ALERTS_ENABLED output is missing or invalid; optional state persistence cannot be selected safely.'
+}
 if ($complianceConnected) {
-  Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
+  try {
+    Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
+  } catch {
+    if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+    throw
+  }
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupVerified' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
 }
 else {
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupUnavailable' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
   $retentionWarning = "Unified audit log retention policy bootstrap was skipped because Security & Compliance PowerShell authentication was not available. Configure and validate '$retentionPolicyName' manually."
   $degradedConditions.Add($retentionWarning)
   Write-Warning $retentionWarning
