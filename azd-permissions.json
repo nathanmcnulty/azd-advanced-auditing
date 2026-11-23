@@ -1,0 +1,122 @@
+{
+  "status": "implemented",
+  "schemaVersion": "1.0",
+  "coverage": "partial",
+  "requirements": [
+    {
+      "evidenceState": "code",
+      "scope": "Selected resource group and Automation account",
+      "phase": "deployment",
+      "kind": "azure-rbac",
+      "evidence": [
+        {
+          "path": "infra/main.bicep",
+          "sha256": "d3e8105b32079e3ee41a79e41f3b521f0d3055ac0918c02aafe6aa21ce084f16"
+        },
+        {
+          "path": "hooks/Common.ps1",
+          "sha256": "bb72529de39d90445ce488b98d885352f77822503f3c88cdd8ffc15cb57e5f9a"
+        }
+      ],
+      "feature": "baseline-deployment",
+      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication; no grant is made by this inventory.",
+      "defaultEnabled": true,
+      "resource": "Azure Resource Manager",
+      "principal": "Selected deployment operator",
+      "permission": "Solution resource deployment/write permissions (exact custom-role mapping not yet inventoried)"
+    },
+    {
+      "evidenceState": "code",
+      "scope": "Selected Exchange organization",
+      "phase": "runtime",
+      "kind": "application",
+      "evidence": [
+        {
+          "path": "hooks/postprovision.ps1",
+          "sha256": "5b0cd2f4d647570102e4a411c83dabd2f25c49cf0e9a569d35cb40b71d329a46"
+        },
+        {
+          "path": "runbooks/Enable-AdvancedAuditing.ps1",
+          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
+        }
+      ],
+      "feature": "mailbox-auditing",
+      "rationale": "Existing app-role assignment and managed-identity runbook connection; effective authority still requires separate live validation.",
+      "defaultEnabled": true,
+      "resource": "Office 365 Exchange Online",
+      "principal": "Automation account managed identity",
+      "permission": "Exchange.ManageAsApp"
+    },
+    {
+      "evidenceState": "code",
+      "scope": "Selected Exchange organization",
+      "phase": "runtime",
+      "kind": "exchange-rbac",
+      "evidence": [
+        {
+          "path": "hooks/postprovision.ps1",
+          "sha256": "5b0cd2f4d647570102e4a411c83dabd2f25c49cf0e9a569d35cb40b71d329a46"
+        },
+        {
+          "path": "runbooks/Enable-AdvancedAuditing.ps1",
+          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
+        }
+      ],
+      "feature": "mailbox-auditing",
+      "rationale": "Existing bootstrap creates a scoped role containing mailbox reads, audit bypass reads and restricted Set-Mailbox parameters. This manifest does not authorize those writes.",
+      "defaultEnabled": true,
+      "resource": "Exchange Online",
+      "principal": "Automation account managed identity",
+      "permission": "Mailbox Auditing custom management role/assignment"
+    },
+    {
+      "evidenceState": "code",
+      "scope": "Exact supplied same-subscription resource IDs; optional destinations only when selected",
+      "phase": "discovery",
+      "kind": "azure-rbac",
+      "evidence": [
+        {
+          "path": "scripts/Audit.Validation.psm1",
+          "sha256": "cfa571cb91c72a901c1adfc8bb29236d271c29ae62ecbdda2e4e0d96fd9d5927"
+        }
+      ],
+      "feature": "readonly-validation",
+      "rationale": "Optional read-only command; no token bootstrap or grant. Reader/custom read authority must already exist.",
+      "defaultEnabled": false,
+      "resource": "Azure Resource Manager",
+      "principal": "Selected cached validation user",
+      "permission": "Read selected Automation account/runbooks/schedule/variables/diagnosticSettings and selected LAW/action group metadata"
+    },
+    {
+      "evidenceState": "code",
+      "scope": "Owned Automation account/rules and selected existing LAW/action group",
+      "phase": "deployment",
+      "kind": "azure-rbac",
+      "evidence": [
+        {
+          "path": "infra/main.bicep",
+          "sha256": "d3e8105b32079e3ee41a79e41f3b521f0d3055ac0918c02aafe6aa21ce084f16"
+        },
+        {
+          "path": "hooks/AuditOperationalState.ps1",
+          "sha256": "fbe5ddde2d7e92082b4d1065af08664db55a96500d5f6e3f889a5044420afa9c"
+        }
+      ],
+      "feature": "operational-alerts",
+      "rationale": "False default creates none of these optional resources. Enabled bootstrap persists nonsecret scalar state; no runtime role assignment or recipient provisioning.",
+      "defaultEnabled": false,
+      "resource": "Azure Monitor and Azure Automation",
+      "principal": "Selected deployment operator",
+      "permission": "Microsoft.Insights/diagnosticSettings/write; Microsoft.Insights/scheduledQueryRules/write; Microsoft.Automation/automationAccounts/variables/write plus selected destination metadata access"
+    }
+  ],
+  "reviewedOn": "2026-10-10",
+  "gaps": [
+    "Baseline deployment custom-role action mapping, lock/delete authority and exact operator scope remain to be inventoried; broad role names are not a grant recommendation.",
+    "Existing cached Graph token reads/Exchange service-principal app-role assignment require a complete delegated permission and effective operator-role mapping; source does not declare token scopes.",
+    "Exchange/Purview bootstrap operator roles, consent and effective managed-identity assignments remain unverified. AUD-002 / issue #1 retains the live supported-platform audit/retention/bypass retest.",
+    "Existing LAW ingestion and action-group receiver/delivery permissions and outcomes are operator-owned and not proved by this metadata inventory.",
+    "Existing raw bootstrap exception logging is outside the new bounded signal/report safety claim."
+  ],
+  "solutionId": "azd-advanced-auditing"
+}
