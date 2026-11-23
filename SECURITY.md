@@ -3,10 +3,12 @@
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately through GitHub's **Report a
-vulnerability** flow on the repository Security tab. Do not open a public issue
-or include credentials, tokens, tenant identifiers, callback URLs, or other
-sensitive data in a report. If private reporting is unavailable, contact the
-maintainer privately through the GitHub profile with only the minimum
+vulnerability** flow on the repository's
+[Security tab](https://github.com/nathanmcnulty/azd-advanced-auditing/security).
+Do not open a public issue or include credentials, tokens, tenant identifiers,
+callback URLs, or other sensitive data in a report. If private reporting is
+unavailable, contact the maintainer privately through the
+[GitHub profile](https://github.com/nathanmcnulty) with only the minimum
 reproducible detail needed to investigate.
 
 ## Supported versions
