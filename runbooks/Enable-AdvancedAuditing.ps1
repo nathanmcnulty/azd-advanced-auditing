@@ -1,3 +1,12 @@
+<#
+.SYNOPSIS
+Configures advanced mailbox auditing.
+
+.DESCRIPTION
+The -WhatIf option performs a client-side inventory preview and reports only
+the matching mailbox count. It does not call Set-Mailbox or validate whether
+Exchange will accept the server-side updates.
+#>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $false)]
@@ -74,30 +83,33 @@ try {
   Connect-ExchangeOnline -ManagedIdentity -Organization $exchangeOrganization -ShowBanner:$false | Out-Null
 
   $mailboxes = @(Get-Mailbox -ResultSize Unlimited -Filter { RecipientType -eq "UserMailbox" -and RecipientTypeDetails -ne "DiscoveryMailbox" })
-  Write-Output "Processing $($mailboxes.Count) user mailboxes."
 
-  if ($mailboxes.Count -gt 0) {
-    Get-Mailbox -Identity $mailboxes[0].PrimarySmtpAddress.ToString() | Out-Null
+  if ($WhatIf.IsPresent) {
+    Write-Output "WhatIf preview identified $($mailboxes.Count) user mailboxes. No Set-Mailbox calls were made; server-side update validation was not performed."
   }
+  else {
+    Write-Output "Processing $($mailboxes.Count) user mailboxes."
 
-  foreach ($mailbox in $mailboxes) {
-    $identity = $mailbox.PrimarySmtpAddress.ToString()
-    Write-Output "Updating $identity"
-
-    $setMailboxParams = @{
-      Identity        = $identity
-      AuditEnabled    = $true
-      AuditLogAgeLimit = 365
-      AuditAdmin      = @{ add = $auditAdminActions }
-      AuditDelegate   = @{ add = $auditDelegateActions }
-      AuditOwner      = @{ add = $auditOwnerActions }
+    if ($mailboxes.Count -gt 0) {
+      Get-Mailbox -Identity $mailboxes[0].PrimarySmtpAddress.ToString() | Out-Null
     }
 
-    if ($WhatIf.IsPresent) {
-      $setMailboxParams['WhatIf'] = $true
+    foreach ($mailbox in $mailboxes) {
+      $identity = $mailbox.PrimarySmtpAddress.ToString()
+
+      $setMailboxParams = @{
+        Identity        = $identity
+        AuditEnabled    = $true
+        AuditLogAgeLimit = 365
+        AuditAdmin      = @{ add = $auditAdminActions }
+        AuditDelegate   = @{ add = $auditDelegateActions }
+        AuditOwner      = @{ add = $auditOwnerActions }
+      }
+
+      Set-Mailbox @setMailboxParams | Out-Null
     }
 
-    Set-Mailbox @setMailboxParams
+    Write-Output "Completed auditing configuration for $($mailboxes.Count) user mailboxes."
   }
 }
 finally {
