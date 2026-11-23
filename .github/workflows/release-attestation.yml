@@ -1,0 +1,107 @@
+name: Attest release bundle
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify signed annotated tag
+        id: verify_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Push events bind the tip commit, not the annotated-tag object.
+          # The required tag-ruleset trust boundary is documented separately.
+          if [[ "${GITHUB_REF_PROTECTED:-false}" != "true" ]]; then
+            echo "Release tag ref is not protected; see docs/release-attestation.md for the required v* tag ruleset." >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != refs/tags/* ]] || ! git check-ref-format "${GITHUB_REF}"; then
+            echo "Release ref must be an exact tag ref." >&2
+            exit 1
+          fi
+          tag="${GITHUB_REF#refs/tags/}"
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}")"
+          if ! jq -e --arg ref "${GITHUB_REF}" '
+            .ref == $ref and .object.type == "tag" and
+            (.object.sha | type == "string" and length == 40 and test("^[0-9a-f]{40}$"))
+          ' <<<"${ref_json}" > /dev/null; then
+            echo "Release tag '${tag}' is not the exact annotated tag ref." >&2
+            exit 1
+          fi
+          tag_sha="$(jq -r '.object.sha' <<<"${ref_json}")"
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}")"
+          if ! jq -e --arg tag "${tag}" --arg sha "${tag_sha}" '
+            .sha == $sha and .tag == $tag and .object.type == "commit" and
+            .verification.verified == true and
+            (.object.sha | type == "string" and length == 40 and test("^[0-9a-f]{40}$"))
+          ' <<<"${tag_json}" > /dev/null; then
+            echo "Release tag '${tag}' is not a verified annotated tag for an exact commit." >&2
+            exit 1
+          fi
+          tag_commit="$(jq -r '.object.sha' <<<"${tag_json}")"
+          local_tag_sha="$(git rev-parse --verify "${GITHUB_REF}^{tag}")"
+          local_commit="$(git rev-parse --verify "${GITHUB_REF}^{commit}")"
+          head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          if [[ "${tag_sha}" != "${local_tag_sha}" || "${tag_commit}" != "${local_commit}" ||
+                "${tag_commit}" != "${GITHUB_SHA}" || "${tag_commit}" != "${head_commit}" ]]; then
+            echo "Verified release tag '${tag}' does not match the checked-out tag and event commit." >&2
+            exit 1
+          fi
+          default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
+          git fetch --no-tags origin "refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
+          if ! git merge-base --is-ancestor "${tag_commit}" "refs/remotes/origin/${default_branch}"; then
+            echo "Release tag '${tag}' does not point to a commit on '${default_branch}'." >&2
+            exit 1
+          fi
+          echo "commit=${tag_commit}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create deterministic source release bundle
+        id: bundle
+        shell: bash
+        env:
+          VERIFIED_COMMIT: ${{ steps.verify_tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${VERIFIED_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release bundle requires the verified commit output." >&2
+            exit 1
+          fi
+          tag="${GITHUB_REF#refs/tags/}"
+          safe_tag="${tag//\//-}"
+          repository="${GITHUB_REPOSITORY##*/}"
+          archive="${RUNNER_TEMP}/${repository}-${safe_tag}.tar.gz"
+          git archive --format=tar.gz --prefix="${repository}-${safe_tag}/" "${VERIFIED_COMMIT}" > "${archive}"
+          sha256sum "${archive}"
+          echo "path=${archive}" >> "${GITHUB_OUTPUT}"
+          echo "name=${repository}-${safe_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload source release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: ${{ steps.bundle.outputs.path }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.bundle.outputs.path }}
