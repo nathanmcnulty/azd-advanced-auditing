@@ -151,6 +151,96 @@ Describe 'Validation runbook output privacy' {
   }
 }
 
+Describe 'Remediation runbook output privacy' {
+  It 'reports aggregate WhatIf status while suppressing Exchange mailbox identities and return objects' {
+    $runbookPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'runbooks\Enable-AdvancedAuditing.ps1'
+    $previousRunbookPath = $env:AA_TEST_RUNBOOK
+    $childScript = @'
+$ErrorActionPreference = 'Stop'
+$global:fixtureMailboxes = @(
+  [pscustomobject]@{ PrimarySmtpAddress = 'private.one@example.invalid' }
+  [pscustomobject]@{ PrimarySmtpAddress = 'private.two@example.invalid' }
+)
+$global:setMailboxCalls = @()
+$global:lookupCalls = @()
+
+function Get-Module {
+  [CmdletBinding()]
+  param([string]$Name, [switch]$ListAvailable)
+  if ($Name -eq 'ExchangeOnlineManagement' -and $ListAvailable.IsPresent) {
+    return [pscustomobject]@{ Version = [version]'3.10.1'; Path = 'offline-fixture-module' }
+  }
+  throw "Unexpected module lookup: $Name"
+}
+function Import-Module {
+  [CmdletBinding()]
+  param([string]$Name, [switch]$Force)
+}
+function Connect-ExchangeOnline {
+  [CmdletBinding()]
+  param([switch]$ManagedIdentity, [string]$Organization, [switch]$ShowBanner)
+  if (-not $ManagedIdentity.IsPresent -or $Organization -ne 'fixture.example.invalid') {
+    throw 'Unexpected Exchange connection arguments.'
+  }
+}
+function Get-Mailbox {
+  [CmdletBinding()]
+  param([string]$Identity, [string]$ResultSize, [scriptblock]$Filter)
+  if ($PSBoundParameters.ContainsKey('Identity')) {
+    $global:lookupCalls += $Identity
+    return $global:fixtureMailboxes[0]
+  }
+  return $global:fixtureMailboxes
+}
+function Set-Mailbox {
+  [CmdletBinding()]
+  param(
+    [string]$Identity,
+    [bool]$AuditEnabled,
+    [int]$AuditLogAgeLimit,
+    [hashtable]$AuditAdmin,
+    [hashtable]$AuditDelegate,
+    [hashtable]$AuditOwner,
+    [switch]$WhatIf
+  )
+  $global:setMailboxCalls += [pscustomobject]@{ Identity = $Identity; WhatIf = $WhatIf.IsPresent }
+  [pscustomobject]@{ ResultIdentity = $Identity; SyntheticResult = 'offline Exchange stub' }
+}
+function Disconnect-ExchangeOnline {
+  [CmdletBinding()]
+  param([switch]$Confirm)
+}
+
+$captured = @(& $env:AA_TEST_RUNBOOK -Organization 'fixture.example.invalid' -WhatIf)
+if ($global:setMailboxCalls.Count -ne 2) { throw "Expected two stubbed Set-Mailbox calls; got $($global:setMailboxCalls.Count)." }
+if (@($global:setMailboxCalls | Where-Object { -not $_.WhatIf }).Count -ne 0) { throw 'The runbook did not pass WhatIf to every stubbed Set-Mailbox call.' }
+$text = ($captured | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+if ($text -notmatch 'Processing 2 user mailboxes\.') { throw 'The aggregate mailbox count was missing.' }
+if ($text -notmatch 'WhatIf completed for 2 user mailboxes; no changes were applied\.') { throw 'The dry-run aggregate summary was missing.' }
+if ($text -match '[^\s@]+@example\.invalid|ResultIdentity|SyntheticResult') { throw 'The runbook exposed a mailbox identifier or synthetic cmdlet return object.' }
+Write-Output $text
+'@
+
+    try {
+      $env:AA_TEST_RUNBOOK = $runbookPath
+      $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+      $pwshPath = (Get-Command pwsh -ErrorAction Stop).Source
+      $childOutput = @(& $pwshPath -NoLogo -NoProfile -EncodedCommand $encodedCommand 2>&1)
+      $childExitCode = $LASTEXITCODE
+    }
+    finally {
+      if ($null -eq $previousRunbookPath) { Remove-Item Env:AA_TEST_RUNBOOK -ErrorAction SilentlyContinue }
+      else { $env:AA_TEST_RUNBOOK = $previousRunbookPath }
+    }
+
+    $childText = $childOutput -join [Environment]::NewLine
+    $childExitCode | Should -Be 0 -Because $childText
+    $childText | Should -Match 'Processing 2 user mailboxes\.'
+    $childText | Should -Match 'WhatIf completed for 2 user mailboxes; no changes were applied\.'
+    $childText | Should -Not -Match 'private\.(one|two)@example\.invalid|ResultIdentity|SyntheticResult'
+  }
+}
+
 Describe 'Automation runbook publication' {
   BeforeAll {
     $commonPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1'

@@ -82,7 +82,6 @@ try {
 
   foreach ($mailbox in $mailboxes) {
     $identity = $mailbox.PrimarySmtpAddress.ToString()
-    Write-Output "Updating $identity"
 
     $setMailboxParams = @{
       Identity        = $identity
@@ -97,7 +96,14 @@ try {
       $setMailboxParams['WhatIf'] = $true
     }
 
-    Set-Mailbox @setMailboxParams
+    Set-Mailbox @setMailboxParams | Out-Null
+  }
+
+  if ($WhatIf.IsPresent) {
+    Write-Output "WhatIf completed for $($mailboxes.Count) user mailboxes; no changes were applied."
+  }
+  else {
+    Write-Output "Completed auditing configuration for $($mailboxes.Count) user mailboxes."
   }
 }
 finally {
