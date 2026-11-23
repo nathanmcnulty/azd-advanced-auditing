@@ -27,6 +27,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Push events bind the tip commit, not the annotated-tag object.
+          # The required tag-ruleset trust boundary is documented separately.
+          if [[ "${GITHUB_REF_PROTECTED:-false}" != "true" ]]; then
+            echo "Release tag ref is not protected; see docs/release-attestation.md for the required v* tag ruleset." >&2
+            exit 1
+          fi
           if [[ "${GITHUB_REF}" != refs/tags/* ]] || ! git check-ref-format "${GITHUB_REF}"; then
             echo "Release ref must be an exact tag ref." >&2
             exit 1

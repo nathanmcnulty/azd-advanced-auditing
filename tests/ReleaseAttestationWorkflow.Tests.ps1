@@ -1,5 +1,6 @@
 BeforeAll {
     $script:releaseWorkflow = Get-Content (Join-Path $PSScriptRoot '../.github/workflows/release-attestation.yml') -Raw
+    $script:releasePolicy = Get-Content (Join-Path $PSScriptRoot '../docs/release-attestation.md') -Raw
 }
 
 Describe 'Release attestation output wiring' {
@@ -11,6 +12,12 @@ Describe 'Release attestation output wiring' {
         $bundle | Should -Match 'VERIFIED_COMMIT: \$\{\{ steps\.verify_tag\.outputs\.commit \}\}'
         $bundle | Should -Match 'git archive .*"\$\{VERIFIED_COMMIT\}"'
         $bundle | Should -Not -Match 'git (rev-list|rev-parse)'
+    }
+    It 'requires a protected ref and documents the commit-only tag boundary' {
+        $script:releaseWorkflow | Should -Match 'GITHUB_REF_PROTECTED'
+        $script:releasePolicy | Should -Match 'does not bind the annotated-tag object'
+        $script:releasePolicy | Should -Match 'Restrict updates'
+        $script:releasePolicy | Should -Match 'Restrict deletions'
     }
 }
 
@@ -70,11 +77,12 @@ git clone --quiet --no-local origin checkout
 cd checkout
 git checkout --quiet --detach "$release_commit"
 
-export GITHUB_REF="refs/tags/${tag}" GITHUB_SHA="$release_commit"
+export GITHUB_REF="refs/tags/${tag}" GITHUB_SHA="$release_commit" GITHUB_REF_PROTECTED=true
 export GITHUB_REPOSITORY='example/azd-advanced-auditing' GITHUB_OUTPUT="$FIXTURE_ROOT/verify.outputs"
 export RUNNER_TEMP="$FIXTURE_ROOT"
 printf '%s\n' "$release_commit" > "$FIXTURE_ROOT/expected-commit.txt"
 printf '%s\n' "$tag_sha" > "$FIXTURE_ROOT/expected-tag-object.txt"
+printf '%s\n' "$tag_sha" > "$FIXTURE_ROOT/original-tag-object.txt"
 
 jq -n --arg ref "$GITHUB_REF" --arg sha "$tag_sha" --slurpfile overrides "$FIXTURE_ROOT/overrides.json" \
     '{ref:$ref,object:{type:"tag",sha:$sha}} * $overrides[0].ref' > "$FIXTURE_ROOT/ref.json"
@@ -99,6 +107,17 @@ gh() {
 export -f gh
 
 case "$FIXTURE_CASE" in
+    same-commit-tag-replaced-before-read)
+        git tag --force -a "$tag" "$release_commit" -m 'replacement annotation'
+        replacement_sha="$(git rev-parse "refs/tags/${tag}")"
+        printf '%s\n' "$replacement_sha" > "$FIXTURE_ROOT/replacement-tag-object.txt"
+        printf '%s\n' "$replacement_sha" > "$FIXTURE_ROOT/expected-tag-object.txt"
+        export FIXTURE_TAG_SHA="$replacement_sha" GITHUB_REF_PROTECTED=false
+        jq -n --arg ref "$GITHUB_REF" --arg sha "$replacement_sha" \
+            '{ref:$ref,object:{type:"tag",sha:$sha}}' > "$FIXTURE_ROOT/ref.json"
+        jq -n --arg tag "$tag" --arg sha "$replacement_sha" --arg commit "$release_commit" \
+            '{sha:$sha,tag:$tag,object:{type:"commit",sha:$commit},verification:{verified:true}}' > "$FIXTURE_ROOT/tag.json"
+        ;;
     branch-ref) export GITHUB_REF=refs/heads/main ;;
     local-tag-moved) git tag --force -a "$tag" "$base_commit" -m replacement ;;
     local-tag-object-changed) git tag --force -a "$tag" "$release_commit" -m replacement ;;
@@ -214,6 +233,22 @@ tar -xOf "$archive" azd-advanced-auditing-v1.2.3/payload.txt > "$FIXTURE_ROOT/bu
         @(Get-Content (Join-Path $result.Root 'api.calls')).Count | Should -Be 2
     }
 
+    It 'blocks a two-sided same-commit tag replacement when the ref is unprotected' {
+        $result = Invoke-ReleaseProducerFixture -Case 'same-commit-tag-replaced-before-read'
+        $originalTag = (Get-Content (Join-Path $result.Root 'original-tag-object.txt')).Trim()
+        $replacementTag = (Get-Content (Join-Path $result.Root 'replacement-tag-object.txt')).Trim()
+        $eventCommit = (Get-Content (Join-Path $result.Root 'expected-commit.txt')).Trim()
+        $originalTag | Should -Not -Be $replacementTag
+        $ref = Get-Content (Join-Path $result.Root 'ref.json') -Raw | ConvertFrom-Json
+        $tag = Get-Content (Join-Path $result.Root 'tag.json') -Raw | ConvertFrom-Json
+        $ref.object.sha | Should -Be $replacementTag
+        $tag.sha | Should -Be $replacementTag
+        $tag.object.sha | Should -Be $eventCommit
+        $result.ExitCode | Should -Not -Be 0
+        $result.Output | Should -Match 'Release tag ref is not protected'
+        Test-Path (Join-Path $result.Root 'api.calls') | Should -BeFalse
+        Test-Path (Join-Path $result.Root 'verify.outputs') | Should -BeFalse
+    }
     It 'rejects mismatched local, event or remote identities: <_>' -ForEach @(
         'local-tag-moved', 'local-tag-object-changed', 'event-commit-mismatch',
         'event-commit-short', 'head-commit-mismatch', 'remote-commit-mismatch'
