@@ -221,6 +221,9 @@ function Disconnect-ExchangeOnline {
 }
 
 switch ($env:AA_TEST_MODE) {
+  'NativeWhatIfProbe' {
+    Set-Mailbox -Identity $global:fixtureMailboxes[0].PrimarySmtpAddress -WhatIf
+  }
   'WhatIf' {
     & $env:AA_TEST_RUNBOOK -Organization 'fixture.example.invalid' -WhatIf
   }
@@ -255,7 +258,7 @@ Write-Output ('FIXTURE_SUMMARY=' + ($summary | ConvertTo-Json -Compress))
 '@
 
     function Invoke-RunbookHarness {
-      param([Parameter(Mandatory)][ValidateSet('WhatIf', 'Success', 'Failure')][string]$Mode)
+      param([Parameter(Mandatory)][ValidateSet('NativeWhatIfProbe', 'WhatIf', 'Success', 'Failure')][string]$Mode)
 
       $previousRunbookPath = $env:AA_TEST_RUNBOOK
       $previousMode = $env:AA_TEST_MODE
@@ -293,6 +296,19 @@ Write-Output ('FIXTURE_SUMMARY=' + ($summary | ConvertTo-Json -Compress))
         else { $env:AA_TEST_MODE = $previousMode }
       }
     }
+  }
+
+  It 'captures native ShouldProcess WhatIf target output from the child process' {
+    $result = Invoke-RunbookHarness -Mode NativeWhatIfProbe
+    $combinedOutput = $result.StdOut + [Environment]::NewLine + $result.StdErr
+    $summaryLine = @($result.StdOut -split '\r?\n' | Where-Object { $_ -like 'FIXTURE_SUMMARY=*' } | Select-Object -Last 1)
+
+    $result.ExitCode | Should -Be 0 -Because $combinedOutput
+    $combinedOutput | Should -Match 'What if:.*private\.one@example\.invalid'
+    $summaryLine.Count | Should -Be 1 -Because $combinedOutput
+    $summary = ($summaryLine[0] -replace '^FIXTURE_SUMMARY=', '') | ConvertFrom-Json
+    $summary.SetMailboxInvocations | Should -Be 1
+    $summary.SetMailboxExecutions | Should -Be 0
   }
 
   It 'uses a count-only client WhatIf preview without leaking native ShouldProcess output' {
