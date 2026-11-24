@@ -141,6 +141,7 @@ Describe 'Preprovision preserves existing schedule linkage' {
         [Environment]::SetEnvironmentVariable('AZURE_TENANT_ID', $script:tenantId)
         [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', $script:subscriptionId)
         [Environment]::SetEnvironmentVariable('AZURE_RESOURCE_GROUP', 'rg-offline')
+        [Environment]::SetEnvironmentVariable('AUTOMATION_ACCOUNT_NAME', $null)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_ACCOUNT_ID', $script:accountId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_PRINCIPAL_ID', $script:principalId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_JOB_SCHEDULE_ID', $script:scheduleId)
@@ -150,9 +151,21 @@ Describe 'Preprovision preserves existing schedule linkage' {
         $global:testScheduleId = $script:scheduleId
         $global:testSubscriptionId = $script:subscriptionId
         $global:testTenantId = $script:tenantId
+        $global:testAzdValues = [ordered]@{ AZURE_ENV_NAME='offline'; AZURE_SUBSCRIPTION_ID=$script:subscriptionId; AZURE_TENANT_ID=$script:tenantId; AZURE_RESOURCE_GROUP='rg-offline' }
         function azd {
-          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') { $global:LASTEXITCODE = 0; return 'AZURE_ENV_NAME=offline' }
-          if ($args[0] -eq 'env' -and $args[1] -eq 'set') { $global:LASTEXITCODE = 0; return }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            return @($global:testAzdValues.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value })
+          }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'set') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            $global:testAzdValues[$args[2]] = $args[3]
+            return
+          }
           throw "Unexpected azd command: $($args -join ' ')"
         }
         function az {
@@ -179,7 +192,7 @@ Describe 'Preprovision preserves existing schedule linkage' {
       }
       finally {
         foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
-        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId,testSubscriptionId,testTenantId -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId,testSubscriptionId,testTenantId,testAzdValues -Scope Global -ErrorAction SilentlyContinue
         $global:LASTEXITCODE = 0
       }
     }
@@ -195,6 +208,7 @@ Describe 'Preprovision preserves existing schedule linkage' {
         [Environment]::SetEnvironmentVariable('AZURE_TENANT_ID', $script:tenantId)
         [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', $script:subscriptionId)
         [Environment]::SetEnvironmentVariable('AZURE_RESOURCE_GROUP', 'rg-offline')
+        [Environment]::SetEnvironmentVariable('AUTOMATION_ACCOUNT_NAME', $null)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_ACCOUNT_ID', $script:accountId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_PRINCIPAL_ID', '99999999-9999-9999-9999-999999999999')
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_JOB_SCHEDULE_ID', $script:scheduleId)
@@ -204,9 +218,21 @@ Describe 'Preprovision preserves existing schedule linkage' {
         $global:testScheduleId = $script:scheduleId
         $global:testSubscriptionId = $script:subscriptionId
         $global:testTenantId = $script:tenantId
+        $global:testAzdValues = [ordered]@{ AZURE_ENV_NAME='offline'; AZURE_SUBSCRIPTION_ID=$script:subscriptionId; AZURE_TENANT_ID=$script:tenantId; AZURE_RESOURCE_GROUP='rg-offline' }
         function azd {
-          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') { $global:LASTEXITCODE = 0; return 'AZURE_ENV_NAME=offline' }
-          if ($args[0] -eq 'env' -and $args[1] -eq 'set') { $global:LASTEXITCODE = 0; return }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            return @($global:testAzdValues.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value })
+          }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'set') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            $global:testAzdValues[$args[2]] = $args[3]
+            return
+          }
           throw "Unexpected azd command: $($args -join ' ')"
         }
         function az {
@@ -231,7 +257,7 @@ Describe 'Preprovision preserves existing schedule linkage' {
       }
       finally {
         foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
-        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId,testSubscriptionId,testTenantId -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId,testSubscriptionId,testTenantId,testAzdValues -Scope Global -ErrorAction SilentlyContinue
         $global:LASTEXITCODE = 0
       }
     }

@@ -35,7 +35,7 @@ Describe 'Preprovision and predown selected-target guard' {
     $account = [pscustomobject]@{
       id = $script:subscriptionId
       tenantId = $script:tenantId
-      user = [pscustomobject]@{ name = 'offline@example.invalid' }
+      user = [pscustomobject]@{ name = 'offline@example.invalid'; type = 'user' }
     }
     $token = [pscustomobject]@{
       accessToken = 'offline-token-sentinel'
@@ -53,6 +53,13 @@ Describe 'Preprovision and predown selected-target guard' {
     $global:PreHookTargetFixture = [pscustomobject]@{
       SubscriptionId = $script:subscriptionId
       TenantId = $script:tenantId
+      BoundEnvironment = 'offline'
+      DefaultEnvironment = 'offline'
+      DriftDefaultAfterGroupExists = $false
+      DriftDefaultAfterLockShow = $false
+      DriftResourceAfterLockShow = $false
+      DriftResourceName = 'AUTOMATION_ACCOUNT_NAME'
+      DriftProcessEnvironmentAfterLockShow = $false
       AzdValues = [ordered]@{
         AZURE_ENV_NAME = 'offline'
         AZURE_SUBSCRIPTION_ID = $script:subscriptionId
@@ -60,16 +67,26 @@ Describe 'Preprovision and predown selected-target guard' {
         AZURE_RESOURCE_GROUP = 'rg-offline'
         AUTOMATION_ACCOUNT_NAME = 'aaauditoffline'
       }
+      OtherAzdValues = [ordered]@{
+        AZURE_ENV_NAME = 'other'
+        AZURE_SUBSCRIPTION_ID = '33333333-3333-3333-3333-333333333333'
+        AZURE_TENANT_ID = '44444444-4444-4444-4444-444444444444'
+        AZURE_RESOURCE_GROUP = 'rg-other'
+        AUTOMATION_ACCOUNT_NAME = 'aaauditother'
+      }
+      AzdValuesByEnvironment = $null
       AmbientSubscription = '33333333-3333-3333-3333-333333333333'
       AmbientTenant = '44444444-4444-4444-4444-444444444444'
       AccountJson = $account | ConvertTo-Json -Compress
       AccountJsonOverride = ''
+      AccountJsonOverrideAfterFirstArm = $false
       TokenJson = $token | ConvertTo-Json -Compress
       TokenJsonOverride = ''
       ArmResponses = [Collections.Generic.List[string]]::new()
       ArmResponseIndex = 0
       ArmStatusCode = 200
       LockExists = $true
+      LockReturnedIdOverride = ''
       GroupExists = 'false'
       AzdExitCode = 0
       AzCalls = [Collections.Generic.List[object]]::new()
@@ -77,6 +94,10 @@ Describe 'Preprovision and predown selected-target guard' {
       WebCalls = [Collections.Generic.List[object]]::new()
       Writes = [Collections.Generic.List[string]]::new()
       Events = [Collections.Generic.List[string]]::new()
+    }
+    $global:PreHookTargetFixture.AzdValuesByEnvironment = @{
+      offline = $global:PreHookTargetFixture.AzdValues
+      other = $global:PreHookTargetFixture.OtherAzdValues
     }
     $enabledJson = $enabledSubscription | ConvertTo-Json -Compress
     $global:PreHookTargetFixture.ArmResponses.Add($enabledJson)
@@ -92,7 +113,10 @@ Describe 'Preprovision and predown selected-target guard' {
       if ($argv.Count -ge 2 -and $argv[0] -eq 'account' -and $argv[1] -eq 'show') {
         $index = [Array]::IndexOf($argv, '--subscription')
         if ($index -ge 0 -and $index + 1 -lt $argv.Count -and $argv[$index + 1] -ieq $fixture.SubscriptionId) {
-          if (-not [string]::IsNullOrEmpty($fixture.AccountJsonOverride)) { return $fixture.AccountJsonOverride }
+          if (-not [string]::IsNullOrEmpty($fixture.AccountJsonOverride) -and
+              (-not $fixture.AccountJsonOverrideAfterFirstArm -or $fixture.WebCalls.Count -gt 0)) {
+            return $fixture.AccountJsonOverride
+          }
           return $fixture.AccountJson
         }
         return ('{{"id":"{0}","tenantId":"{1}","user":{{"name":"ambient@example.invalid"}}}}' -f $fixture.AmbientSubscription, $fixture.AmbientTenant)
@@ -110,9 +134,25 @@ Describe 'Preprovision and predown selected-target guard' {
         return ('{{"accessToken":"ambient-token","subscription":"{0}","tenant":"{1}"}}' -f $fixture.AmbientSubscription, $fixture.AmbientTenant)
       }
 
-      if ($argv.Count -ge 2 -and $argv[0] -eq 'group' -and $argv[1] -eq 'exists') { return $fixture.GroupExists }
+      if ($argv.Count -ge 2 -and $argv[0] -eq 'group' -and $argv[1] -eq 'exists') {
+        if ($fixture.DriftDefaultAfterGroupExists) { $fixture.DefaultEnvironment = 'other' }
+        return $fixture.GroupExists
+      }
       if ($argv.Count -ge 2 -and $argv[0] -eq 'lock' -and $argv[1] -eq 'show') {
-        if ($fixture.LockExists) { return '{"id":"fixture-lock"}' }
+        if ($fixture.DriftDefaultAfterLockShow) { $fixture.DefaultEnvironment = 'other' }
+        if ($fixture.DriftResourceAfterLockShow) {
+          $changedValue = if ($fixture.DriftResourceName -eq 'AZURE_RESOURCE_GROUP') { 'rg-auditchanged' } else { 'aaauditchanged' }
+          $fixture.AzdValuesByEnvironment[$fixture.BoundEnvironment][$fixture.DriftResourceName] = $changedValue
+          [Environment]::SetEnvironmentVariable($fixture.DriftResourceName, $changedValue, 'Process')
+        }
+        if ($fixture.DriftProcessEnvironmentAfterLockShow) {
+          [Environment]::SetEnvironmentVariable('AZURE_ENV_NAME', 'other', 'Process')
+        }
+        if ($fixture.LockExists) {
+          $idsIndex = [Array]::IndexOf($argv, '--ids')
+          $returnedId = if (-not [string]::IsNullOrEmpty($fixture.LockReturnedIdOverride)) { $fixture.LockReturnedIdOverride } else { $argv[$idsIndex + 1] }
+          return ([pscustomobject]@{ id = $returnedId } | ConvertTo-Json -Compress)
+        }
         return ''
       }
       if ($argv.Count -ge 2 -and $argv[0] -eq 'lock' -and $argv[1] -eq 'delete') {
@@ -127,17 +167,21 @@ Describe 'Preprovision and predown selected-target guard' {
     Mock azd {
       $fixture = $global:PreHookTargetFixture
       $argv = [string[]]$args
-      $fixture.AzdCalls.Add($argv)
+      $environmentIndex = [Array]::IndexOf($argv, '--environment')
+      $targetEnvironment = if ($environmentIndex -ge 0 -and $environmentIndex + 1 -lt $argv.Count) { $argv[$environmentIndex + 1] } else { $fixture.DefaultEnvironment }
+      $fixture.AzdCalls.Add([pscustomobject]@{ Args = $argv; TargetEnvironment = $targetEnvironment })
       $command = $argv -join ' '
-      $fixture.Events.Add("azd:$command")
+      $fixture.Events.Add("azd:$command [target=$targetEnvironment]")
       if ($argv.Count -ge 2 -and $argv[0] -eq 'env' -and $argv[1] -eq 'get-values') {
         $global:LASTEXITCODE = $fixture.AzdExitCode
-        return @($fixture.AzdValues.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value })
+        $values = $fixture.AzdValuesByEnvironment[$targetEnvironment]
+        if ($null -eq $values) { $global:LASTEXITCODE = 2; throw "Unknown mocked azd environment: $targetEnvironment" }
+        return @($values.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value })
       }
       if ($argv.Count -ge 2 -and $argv[0] -eq 'env' -and $argv[1] -eq 'set') {
         $global:LASTEXITCODE = 0
-        $fixture.Writes.Add("env-set:$($argv[2])")
-        $fixture.AzdValues[$argv[2]] = $argv[3]
+        $fixture.Writes.Add("azd-set:$targetEnvironment`:$($argv[2])")
+        $fixture.AzdValuesByEnvironment[$targetEnvironment][$argv[2]] = $argv[3]
         return
       }
       $global:LASTEXITCODE = 2
@@ -177,7 +221,7 @@ Describe 'Preprovision and predown selected-target guard' {
     $tokenCall | Should -Contain '--subscription'
     $tokenCall | Should -Contain $script:subscriptionId
     $tokenCall | Should -Not -Contain '--tenant'
-    $global:PreHookTargetFixture.WebCalls.Count | Should -Be 1
+    $global:PreHookTargetFixture.WebCalls.Count | Should -Be 2
     $global:PreHookTargetFixture.WebCalls[0].Uri | Should -BeExactly "https://management.azure.com/subscriptions/$($script:subscriptionId)?api-version=2022-12-01"
     $global:PreHookTargetFixture.WebCalls[0].HasBearer | Should -BeTrue
     $global:PreHookTargetFixture.WebCalls[0].MaximumRedirection | Should -Be 0
@@ -185,8 +229,45 @@ Describe 'Preprovision and predown selected-target guard' {
     $firstWriteIndex = $global:PreHookTargetFixture.Events.IndexOf($firstWrite)
     $armIndex = $global:PreHookTargetFixture.Events.IndexOf('arm:get-subscription')
     $armIndex | Should -BeLessThan $firstWriteIndex
-    $global:PreHookTargetFixture.Events.IndexOf('arm:get-subscription') | Should -BeLessThan $global:PreHookTargetFixture.Events.IndexOf('az:group exists --subscription ' + $script:subscriptionId + ' --name rg-offline --only-show-errors -o tsv')
-    $global:PreHookTargetFixture.Writes | Should -Contain 'env-set:AUTOMATION_JOB_SCHEDULE_ID'
+    $groupReadIndex = @($global:PreHookTargetFixture.Events | ForEach-Object { $_ } | Where-Object { $_ -like 'az:group exists --subscription *' })
+    $global:PreHookTargetFixture.Events.IndexOf('arm:get-subscription') | Should -BeLessThan $global:PreHookTargetFixture.Events.IndexOf($groupReadIndex[0])
+    $finalArmIndex = $global:PreHookTargetFixture.Events.LastIndexOf('arm:get-subscription')
+    $finalWrite = @($global:PreHookTargetFixture.Events | Where-Object { $_ -like 'azd:env set AUTOMATION_JOB_SCHEDULE_ID *' })[0]
+    $finalWriteIndex = $global:PreHookTargetFixture.Events.IndexOf($finalWrite)
+    $finalArmIndex | Should -BeLessThan $finalWriteIndex
+    $global:PreHookTargetFixture.Writes | Should -Contain 'azd-set:offline:AUTOMATION_JOB_SCHEDULE_ID'
+    foreach ($call in $global:PreHookTargetFixture.AzdCalls) {
+      $call.Args | Should -Contain '--environment'
+      $call.TargetEnvironment | Should -BeExactly 'offline'
+    }
+  }
+
+  It 'keeps every preprovision write pinned when the azd default environment changes during discovery' {
+    $global:PreHookTargetFixture.DriftDefaultAfterGroupExists = $true
+
+    & $script:preprovisionPath
+
+    $global:PreHookTargetFixture.DefaultEnvironment | Should -BeExactly 'other'
+    $global:PreHookTargetFixture.Writes | Should -Contain 'azd-set:offline:AUTOMATION_JOB_SCHEDULE_ID'
+    @($global:PreHookTargetFixture.Writes | Where-Object { $_ -like 'azd-set:other:*' }).Count | Should -Be 0
+    foreach ($call in $global:PreHookTargetFixture.AzdCalls) {
+      $call.Args | Should -Contain '--environment'
+      $call.TargetEnvironment | Should -BeExactly 'offline'
+    }
+  }
+
+  It 'leaves earlier environment outputs intact but refuses final schedule persistence if Enabled state changes after discovery' {
+    $disabledState = $global:PreHookTargetFixture.ArmResponses[0] | ConvertFrom-Json
+    $disabledState.state = 'Disabled'
+    $disabledJson = $disabledState | ConvertTo-Json -Compress
+    $global:PreHookTargetFixture.ArmResponses.Add($disabledJson)
+
+    { & $script:preprovisionPath } | Should -Throw '*not Enabled*'
+
+    $global:PreHookTargetFixture.Writes | Should -Contain 'azd-set:offline:AZURE_RESOURCE_GROUP'
+    $global:PreHookTargetFixture.Writes | Should -Contain 'azd-set:offline:AUTOMATION_ACCOUNT_NAME'
+    @($global:PreHookTargetFixture.Writes | Where-Object { $_ -like '*AUTOMATION_JOB_SCHEDULE_ID' }).Count | Should -Be 0
+    $global:PreHookTargetFixture.WebCalls.Count | Should -Be 2
   }
 
   It 'stops both pre-hook entrypoints before downstream dispatch when selected process and azd selectors drift' -ForEach @(
@@ -277,6 +358,59 @@ Describe 'Preprovision and predown selected-target guard' {
     @($global:PreHookTargetFixture.Writes).Count | Should -Be 0
   }
 
+  It 'does not delete a lock reported for a different exact resource' {
+    $global:PreHookTargetFixture.LockReturnedIdOverride = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-other/providers/Microsoft.Authorization/locks/other'
+
+    { & $script:predownPath } | Should -Throw '*different Automation lock*'
+
+    @($global:PreHookTargetFixture.Events | Where-Object { $_ -like 'az:lock delete*' }).Count | Should -Be 0
+    $global:PreHookTargetFixture.WebCalls.Count | Should -Be 1
+  }
+
+  It 'refuses predown when the process environment changes during lock lookup' {
+    $global:PreHookTargetFixture.DriftProcessEnvironmentAfterLockShow = $true
+
+    { & $script:predownPath } | Should -Throw '*process azd environment changed*'
+
+    @($global:PreHookTargetFixture.Events | Where-Object { $_ -like 'az:lock delete*' }).Count | Should -Be 0
+  }
+
+  It 'reads the pinned predown environment even if the azd default selection changes' {
+    $global:PreHookTargetFixture.DriftDefaultAfterLockShow = $true
+
+    & $script:predownPath
+
+    $global:PreHookTargetFixture.DefaultEnvironment | Should -BeExactly 'other'
+    @($global:PreHookTargetFixture.AzdCalls | Where-Object { $_.TargetEnvironment -ne 'offline' }).Count | Should -Be 0
+    @($global:PreHookTargetFixture.Events | Where-Object { $_ -like 'az:lock delete*' }).Count | Should -Be 1
+  }
+
+  It 'refuses predown when the resource group or Automation account changes during lock lookup' -ForEach @(
+    @{ ResourceName = 'AZURE_RESOURCE_GROUP' }, @{ ResourceName = 'AUTOMATION_ACCOUNT_NAME' }
+  ) {
+    $global:PreHookTargetFixture.DriftResourceAfterLockShow = $true
+    $global:PreHookTargetFixture.DriftResourceName = $ResourceName
+
+    { & $script:predownPath } | Should -Throw '*changed before the lock could be removed*'
+
+    @($global:PreHookTargetFixture.Events | Where-Object { $_ -like 'az:lock delete*' }).Count | Should -Be 0
+  }
+
+  It 'refuses predown when the CLI actor changes during lock lookup' {
+    $changedAccount = [pscustomobject]@{
+      id = $script:subscriptionId
+      tenantId = $script:tenantId
+      user = [pscustomobject]@{ name = 'changed@example.invalid'; type = 'user' }
+    }
+    $global:PreHookTargetFixture.AccountJsonOverride = $changedAccount | ConvertTo-Json -Compress
+    $global:PreHookTargetFixture.AccountJsonOverrideAfterFirstArm = $true
+
+    { & $script:predownPath } | Should -Throw '*CLI operator*changed before the lock could be removed*'
+
+    $global:PreHookTargetFixture.WebCalls.Count | Should -Be 2
+    @($global:PreHookTargetFixture.Events | Where-Object { $_ -like 'az:lock delete*' }).Count | Should -Be 0
+  }
+
   It 'preserves the ordinary explicit-target predown lock path' {
     & $script:predownPath
 
@@ -289,6 +423,10 @@ Describe 'Preprovision and predown selected-target guard' {
     $global:PreHookTargetFixture.WebCalls.Count | Should -Be 2
     $secondArmIndex | Should -BeLessThan $deleteIndex
     $global:PreHookTargetFixture.Writes | Should -Contain 'lock-delete'
+    foreach ($call in $global:PreHookTargetFixture.AzdCalls) {
+      $call.Args | Should -Contain '--environment'
+      $call.TargetEnvironment | Should -BeExactly 'offline'
+    }
   }
 }
 

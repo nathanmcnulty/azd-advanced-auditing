@@ -15,11 +15,11 @@
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "485c89b367d96396fe4642a4c82f71235fd516a1186d4a6dbb44ce0f91523a31"
+          "sha256": "9c29028fd41c53cdaa3bf75eb9616c0d3fb3dbfb6aa7d6110be449666c36d46e"
         }
       ],
       "feature": "baseline-deployment",
-      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication. Preprovision and predown also read the selected subscription metadata to require the matching tenant and Enabled state; no grant is made by this inventory.",
+      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication. Preprovision and predown bind azd commands to the injected environment, recheck selected subscription metadata and operator identity, and verify the exact lock before removal; no grant is made by this inventory.",
       "defaultEnabled": true,
       "resource": "Azure Resource Manager",
       "principal": "Selected deployment operator",

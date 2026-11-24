@@ -130,6 +130,14 @@ Describe 'Explicit operator selectors and scoped token metadata' {
     $global:OperatorTokenFixture.AmbientTenant | Should -Not -BeExactly $script:tenantId
   }
 
+  It 'can bind the explicitly selected operator identity around token acquisition' {
+    $context = Get-AuditScopedAccessToken -ResourceUrl 'https://management.azure.com' -SubscriptionId $script:subscriptionId -TenantId $script:tenantId -IncludeOperatorIdentity
+
+    $context.AccessToken | Should -BeExactly 'offline-test-token'
+    $context.OperatorIdentity | Should -BeExactly 'operator@example.test'
+    @($global:OperatorTokenFixture.Calls | Where-Object { $_.Args[0] -eq 'account' -and $_.Args[1] -eq 'show' }).Count | Should -Be 2
+  }
+
   It 'uses only the selected subscription for every vetted token audience, not the ambient account' {
     foreach ($resource in @(
         'https://management.azure.com',
@@ -271,6 +279,7 @@ Describe 'Actual postprovision and Common token consumers' {
       $tokenArgs | Should -Contain $script:subscriptionId
       $tokenArgs | Should -Not -Contain '--tenant'
     }
+
   }
 
   It 'stops Graph domain fallback on a token-context mismatch' {
@@ -375,7 +384,7 @@ Describe 'Actual postprovision and Common token consumers' {
     $firstReceiptWrite | Should -BeGreaterThan $targetRead
 
     $common = Get-Content "$script:repoRoot/hooks/Common.ps1" -Raw
-    $accountMapping = $common.IndexOf('$null = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId')
+    $accountMapping = $common.IndexOf('$account = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId')
     $tokenRequest = $common.IndexOf('$tokenJson = & az @tokenArguments 2>$null')
     $accountMapping | Should -BeGreaterThan -1
     $tokenRequest | Should -BeGreaterThan $accountMapping

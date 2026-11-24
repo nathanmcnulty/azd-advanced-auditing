@@ -126,11 +126,33 @@ function Get-AuditOperatorAccount {
   return $account
 }
 
+function Get-AuditOperatorIdentity {
+  param([Parameter(Mandatory = $true)][object]$Account)
+
+  $userProperty = $Account.PSObject.Properties['user']
+  if ($null -eq $userProperty -or $userProperty.Value -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account identity metadata.')
+  }
+
+  $nameProperty = $userProperty.Value.PSObject.Properties['name']
+  $typeProperty = $userProperty.Value.PSObject.Properties['type']
+  if ($null -eq $nameProperty -or $nameProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($nameProperty.Value)) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account identity metadata.')
+  }
+
+  if ($null -ne $typeProperty -and $typeProperty.Value -is [string] -and -not [string]::IsNullOrWhiteSpace($typeProperty.Value)) {
+    return ('{0}|{1}' -f [string]$typeProperty.Value, [string]$nameProperty.Value)
+  }
+
+  return [string]$nameProperty.Value
+}
+
 function Get-AuditScopedAccessToken {
   param(
     [Parameter(Mandatory = $true)][string]$ResourceUrl,
     [Parameter(Mandatory = $true)][string]$SubscriptionId,
-    [Parameter(Mandatory = $true)][string]$TenantId
+    [Parameter(Mandatory = $true)][string]$TenantId,
+    [Parameter(Mandatory = $false)][switch]$IncludeOperatorIdentity
   )
 
   $parsedSubscriptionId = [guid]::Empty
@@ -151,7 +173,7 @@ function Get-AuditScopedAccessToken {
   }
 
   # Azure CLI resolves the account and tenant from this explicit subscription.
-  $null = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
+  $account = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
 
   try {
     Ensure-Command -Name 'az'
@@ -191,7 +213,22 @@ function Get-AuditScopedAccessToken {
     throw (New-AuditOperatorContextException -Message "Azure CLI token metadata does not match the explicit subscription and tenant selectors for '$ResourceUrl'.")
   }
 
-  return [string]$accessTokenProperty.Value
+  $accessToken = [string]$accessTokenProperty.Value
+  if ($IncludeOperatorIdentity) {
+    $accountAfterToken = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
+    $operatorIdentity = Get-AuditOperatorIdentity -Account $account
+    $operatorIdentityAfterToken = Get-AuditOperatorIdentity -Account $accountAfterToken
+    if ($operatorIdentity -ine $operatorIdentityAfterToken) {
+      throw (New-AuditOperatorContextException -Message 'The selected Azure CLI operator changed during token acquisition.')
+    }
+
+    return [pscustomobject]@{
+      AccessToken = $accessToken
+      OperatorIdentity = $operatorIdentity
+    }
+  }
+
+  return $accessToken
 }
 
 function Assert-AuditOperatorSubscriptionEnabled {
@@ -199,10 +236,12 @@ function Assert-AuditOperatorSubscriptionEnabled {
 
   $subscriptionId = Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $AzdValues
   $tenantId = Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $AzdValues
-  $armToken = Get-AuditScopedAccessToken `
+  $tokenContext = Get-AuditScopedAccessToken `
     -ResourceUrl 'https://management.azure.com' `
     -SubscriptionId $subscriptionId `
-    -TenantId $tenantId
+    -TenantId $tenantId `
+    -IncludeOperatorIdentity
+  $armToken = $tokenContext.AccessToken
   $uri = 'https://management.azure.com/subscriptions/{0}?api-version=2022-12-01' -f $subscriptionId
 
   try {
@@ -260,6 +299,7 @@ function Assert-AuditOperatorSubscriptionEnabled {
   return [pscustomobject]@{
     SubscriptionId = $subscriptionId
     TenantId = $tenantId
+    OperatorIdentity = $tokenContext.OperatorIdentity
   }
 }
 
@@ -315,12 +355,19 @@ function Get-RunbooksPath {
 }
 
 function Get-AzdEnvironmentValues {
-  param([Parameter(Mandatory = $false)][switch]$RequireSuccess)
+  param(
+    [Parameter(Mandatory = $false)][switch]$RequireSuccess,
+    [Parameter(Mandatory = $false)][string]$EnvironmentName
+  )
 
   Ensure-Command -Name 'azd'
 
   $values = @{}
-  $lines = & azd env get-values --no-prompt 2>$null
+  $arguments = @('env', 'get-values', '--no-prompt')
+  if (-not [string]::IsNullOrWhiteSpace($EnvironmentName)) {
+    $arguments += @('--environment', $EnvironmentName.Trim())
+  }
+  $lines = & azd @arguments 2>$null
   if ($RequireSuccess -and $LASTEXITCODE -ne 0) {
     throw 'Could not read the selected azd environment values.'
   }
@@ -342,6 +389,59 @@ function Get-AzdEnvironmentValues {
   }
 
   return $values
+}
+
+function Get-AuditHookEnvironmentName {
+  $environmentName = [System.Environment]::GetEnvironmentVariable('AZURE_ENV_NAME')
+  if ([string]::IsNullOrWhiteSpace($environmentName)) {
+    throw (New-AuditOperatorContextException -Message 'AZURE_ENV_NAME must identify the azd environment for this hook.')
+  }
+
+  return $environmentName.Trim()
+}
+
+function Get-AuditPinnedAzdEnvironmentValues {
+  param(
+    [Parameter(Mandatory = $true)][string]$EnvironmentName,
+    [Parameter(Mandatory = $false)][switch]$RequireResourceValues
+  )
+
+  $expectedEnvironmentName = $EnvironmentName.Trim()
+  if ([string]::IsNullOrWhiteSpace($expectedEnvironmentName)) {
+    throw (New-AuditOperatorContextException -Message 'An explicit azd environment name is required for this hook.')
+  }
+
+  $processEnvironmentName = Get-AuditHookEnvironmentName
+  if ($processEnvironmentName -ine $expectedEnvironmentName) {
+    throw (New-AuditOperatorContextException -Message 'The process azd environment changed during this hook.')
+  }
+
+  $azdValues = Get-AzdEnvironmentValues -RequireSuccess -EnvironmentName $expectedEnvironmentName
+  if ($azdValues.ContainsKey('AZURE_ENV_NAME') -and
+      -not [string]::IsNullOrWhiteSpace([string]$azdValues['AZURE_ENV_NAME']) -and
+      [string]$azdValues['AZURE_ENV_NAME'] -ine $expectedEnvironmentName) {
+    throw (New-AuditOperatorContextException -Message 'The explicitly selected azd environment returned a different environment name.')
+  }
+
+  foreach ($name in @('AZURE_SUBSCRIPTION_ID', 'AZURE_TENANT_ID', 'AZURE_RESOURCE_GROUP', 'AUTOMATION_ACCOUNT_NAME')) {
+    $processValue = [System.Environment]::GetEnvironmentVariable($name)
+    $environmentValue = if ($azdValues.ContainsKey($name)) { [string]$azdValues[$name] } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($processValue) -and
+        -not [string]::IsNullOrWhiteSpace($environmentValue) -and
+        $processValue -ine $environmentValue) {
+      throw (New-AuditOperatorContextException -Message "The process and explicitly selected azd values for '$name' do not match.")
+    }
+  }
+
+  if ($RequireResourceValues) {
+    foreach ($name in @('AZURE_RESOURCE_GROUP', 'AUTOMATION_ACCOUNT_NAME')) {
+      if (-not $azdValues.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$azdValues[$name])) {
+        throw (New-AuditOperatorContextException -Message "The explicitly selected azd environment is missing '$name'.")
+      }
+    }
+  }
+
+  return $azdValues
 }
 
 function Get-ValueFromEnvironment {
@@ -366,11 +466,16 @@ function Get-ValueFromEnvironment {
 function Set-AzdEnvironmentValue {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
-    [Parameter(Mandatory = $true)][string]$Value
+    [Parameter(Mandatory = $true)][string]$Value,
+    [Parameter(Mandatory = $false)][string]$EnvironmentName
   )
 
   Ensure-Command -Name 'azd'
-  & azd env set $Name $Value --no-prompt | Out-Null
+  $arguments = @('env', 'set', $Name, $Value, '--no-prompt')
+  if (-not [string]::IsNullOrWhiteSpace($EnvironmentName)) {
+    $arguments += @('--environment', $EnvironmentName.Trim())
+  }
+  & azd @arguments | Out-Null
   if ($LASTEXITCODE -ne 0) {
     throw "Could not persist azd environment value '$Name'."
   }
