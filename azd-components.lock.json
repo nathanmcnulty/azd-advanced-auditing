@@ -1,0 +1,46 @@
+{
+  "manifestVersion": "1.0",
+  "components": [
+    {
+      "id": "azure-monitor-scheduled-query-notifications",
+      "version": "0.2.0",
+      "sourceRepository": "https://github.com/nathanmcnulty/azd-reference",
+      "sourceRevision": "2948cdbaf9497b69dd7b288b028b6b84dc2fb23b",
+      "files": [
+        {
+          "source": "components/bicep/azure-monitor-scheduled-query-notifications/logic-app-action-group.bicep",
+          "target": "infra/vendor/Azd.AzureMonitorNotifications/logic-app-action-group.bicep",
+          "sha256": "90b3dc9bc40c87b88052a021b390db8e7fc960dd7776a3f686ae2ee000b880f9"
+        },
+        {
+          "source": "components/bicep/azure-monitor-scheduled-query-notifications/scheduled-query-alert.bicep",
+          "target": "infra/vendor/Azd.AzureMonitorNotifications/scheduled-query-alert.bicep",
+          "sha256": "a8a6940be9150b1e60670f3b866f515232769647df816a5f158c4a7f0c67b22b"
+        }
+      ]
+    },
+    {
+      "id": "deployment-validation",
+      "version": "1.1.1",
+      "sourceRepository": "https://github.com/nathanmcnulty/azd-reference",
+      "sourceRevision": "6dc5841a3156b904b89f0f4ff8d97207a26ec15a",
+      "files": [
+        {
+          "source": "components/powershell/deployment-validation/Azd.DeploymentValidation.psd1",
+          "target": "scripts/vendor/Azd.DeploymentValidation/Azd.DeploymentValidation.psd1",
+          "sha256": "96f0773f9b2ebcb2e36cdbc894420fa898f10d99662edefd4a1782c29e9794f0"
+        },
+        {
+          "source": "components/powershell/deployment-validation/Azd.DeploymentValidation.psm1",
+          "target": "scripts/vendor/Azd.DeploymentValidation/Azd.DeploymentValidation.psm1",
+          "sha256": "6ad1183fb38b1b11283f0ff08c0dbb9f84b0070355521dfa9ec70cba125c653d"
+        },
+        {
+          "source": "schemas/deployment-validation.schema.json",
+          "target": "scripts/vendor/Azd.DeploymentValidation/deployment-validation.schema.json",
+          "sha256": "eeabd298edf86ef88f9143dfef3fbec995f20f7ef0d3c380ab832b7514e83c34"
+        }
+      ]
+    }
+  ]
+}

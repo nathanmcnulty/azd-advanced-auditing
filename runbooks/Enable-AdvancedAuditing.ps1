@@ -5,7 +5,9 @@ Configures advanced mailbox auditing.
 .DESCRIPTION
 The -WhatIf option performs a client-side inventory preview and reports only
 the matching mailbox count. It does not call Set-Mailbox or validate whether
-Exchange will accept the server-side updates.
+Exchange will accept the server-side updates. Optional retention telemetry is
+read and emitted only when operational alerts are explicitly enabled and the
+run is not a WhatIf preview.
 #>
 [CmdletBinding()]
 param(
@@ -13,11 +15,49 @@ param(
   [string]$Organization = '',
 
   [Parameter(Mandatory = $false)]
+  [bool]$OperationalAlertsEnabled = $false,
+
+  [Parameter(Mandatory = $false)]
   [switch]$WhatIf
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function ConvertTo-AuditRetentionSetupSignal {
+  param([AllowNull()][string]$RawState, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
+  $status='unknown'
+  $observedAt=$null
+  try {
+    if ([string]::IsNullOrWhiteSpace($RawState) -or $RawState.Length -gt 2048) { throw 'Invalid state' }
+    $state=$RawState | ConvertFrom-Json -DateKind String -ErrorAction Stop
+    if (@($state.PSObject.Properties.Name | Where-Object { $_ -notin @('kind','schemaVersion','accountId','observedAt','setupState') }).Count -or
+      $state.kind -cne 'advancedAuditing.retentionSetup' -or $state.schemaVersion -cne '1.0' -or
+      $state.accountId -notmatch '^/subscriptions/[a-f0-9-]{36}/resourceGroups/[A-Za-z0-9_.()-]+/providers/Microsoft.Automation/automationAccounts/[A-Za-z0-9_-]+$' -or
+      $state.setupState -cnotin @('setupVerified','setupUnavailable','setupFailed') -or $state.observedAt -isnot [string]) { throw 'Invalid state' }
+    $stamp=[DateTimeOffset]::Parse($state.observedAt,[Globalization.CultureInfo]::InvariantCulture)
+    if ($stamp -gt $Now.AddMinutes(5)) { throw 'Invalid state' }
+    $observedAt=$stamp.ToUniversalTime().ToString('o')
+    $status=if($stamp -lt $Now.AddDays(-7)){'stale'}elseif($state.setupState -eq 'setupVerified'){'bootstrapVerified'}else{'degraded'}
+  } catch { $status='unknown'; $observedAt=$null }
+  # Azure Monitor binds the stream to the configured Automation account _ResourceId.
+  # Keep the full identifier inside the state record; never echo it into JobStreams.
+  [ordered]@{kind='advancedAuditing.retentionSetup';schemaVersion='1.0';status=$status;observedAt=$observedAt;recordedAt=$Now.ToUniversalTime().ToString('o');evidenceScope='bootstrapOnly'} | ConvertTo-Json -Compress
+}
+
+function Write-AuditRetentionSetupSignal {
+  [CmdletBinding()]
+  param(
+    [bool]$OperationalAlertsEnabled = $false,
+    [switch]$WhatIf
+  )
+
+  if (-not $OperationalAlertsEnabled -or $WhatIf.IsPresent) { return }
+
+  $retentionSetupState = $null
+  try { $retentionSetupState = [string](Get-AutomationVariable -Name 'AuditRetentionSetupState' -ErrorAction Stop) } catch { }
+  Write-Output (ConvertTo-AuditRetentionSetupSignal -RawState $retentionSetupState)
+}
 
 function Get-ExchangeOrganization {
   param([Parameter(Mandatory = $false)][AllowEmptyString()][string]$ConfiguredValue)
@@ -40,6 +80,7 @@ function Get-ExchangeOrganization {
 }
 
 $exchangeOrganization = Get-ExchangeOrganization -ConfiguredValue $Organization
+Write-AuditRetentionSetupSignal -OperationalAlertsEnabled $OperationalAlertsEnabled -WhatIf:$WhatIf.IsPresent
 $minimumExchangeOnlineManagementVersion = [version]'3.10.1'
 $exchangeOnlineManagementModule = Get-Module -ListAvailable -Name 'ExchangeOnlineManagement' |
   Where-Object { $_.Version -ge $minimumExchangeOnlineManagementVersion } |
