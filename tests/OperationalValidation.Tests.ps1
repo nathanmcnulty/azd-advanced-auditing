@@ -15,8 +15,9 @@ function global:Get-AutomationVariable {
 Import-Module "$PSScriptRoot/../scripts/Audit.Validation.psm1" -Force
 BeforeAll {
     $root=Split-Path $PSScriptRoot -Parent
+    . "$root/hooks/Common.ps1"
     . "$root/hooks/AuditOperationalState.ps1"
-    function Set-AutomationVariableValue { param($SubscriptionId,$ResourceGroupName,$AutomationAccountName,$VariableName,$Value) throw 'Unexpected native variable write' }
+    function Set-AutomationVariableValue { param($SubscriptionId,$TenantId,$ResourceGroupName,$AutomationAccountName,$VariableName,$Value) throw 'Unexpected native variable write' }
     $tokens=$null;$errors=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile("$root/runbooks/Enable-AdvancedAuditing.ps1",[ref]$tokens,[ref]$errors)
     $signalFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'ConvertTo-AuditRetentionSetupSignal'},$true)
@@ -180,7 +181,7 @@ Describe 'Durable bounded bootstrap evidence' {
     }
     It 'persists only bounded scalar state to the exact owned variable' {
         Mock Set-AutomationVariableValue {}
-        Save-AuditRetentionSetupState -Enabled $true -SetupState setupUnavailable -SubscriptionId 'cccccccc-cccc-cccc-cccc-cccccccccccc' -ResourceGroupName fixture-rg -AutomationAccountName fixture-audit
+        Save-AuditRetentionSetupState -Enabled $true -SetupState setupUnavailable -SubscriptionId 'cccccccc-cccc-cccc-cccc-cccccccccccc' -TenantId 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' -ResourceGroupName fixture-rg -AutomationAccountName fixture-audit
         Should -Invoke Set-AutomationVariableValue -Times 1 -Exactly -ParameterFilter {$VariableName -eq 'AuditRetentionSetupState' -and ($Value|ConvertFrom-Json).accountId -eq $script:id -and ($Value|ConvertFrom-Json).setupState -eq 'setupUnavailable'}
     }
 }
