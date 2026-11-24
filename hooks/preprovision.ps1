@@ -11,18 +11,18 @@ Write-Section -Message 'Preparing azd environment values'
 Ensure-Command -Name 'az'
 Ensure-Command -Name 'azd'
 
-$names = Get-AuditTemplateNames
+$azdValues = Get-AzdEnvironmentValues -RequireSuccess
+$target = Assert-AuditOperatorSubscriptionEnabled -AzdValues $azdValues
+$names = Get-AuditTemplateNames -AzdValues $azdValues
 Set-AzdEnvironmentValue -Name 'AZURE_RESOURCE_GROUP' -Value $names.ResourceGroupName
 Set-AzdEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.AutomationAccountName
 
 $deploymentTimestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 Set-AzdEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp
 
-$subscriptionId = [System.Environment]::GetEnvironmentVariable('AZURE_SUBSCRIPTION_ID')
+$subscriptionId = $target.SubscriptionId
 $resourceGroupName = $names.ResourceGroupName
 $automationAccountName = $names.AutomationAccountName
-$azdValues = Get-AzdEnvironmentValues
-if ([string]::IsNullOrWhiteSpace($subscriptionId)) { throw 'AZURE_SUBSCRIPTION_ID is required.' }
 $expectedAccountId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $subscriptionId, $resourceGroupName, $automationAccountName)
 
 Write-Section -Message 'Managing Automation jobSchedule state'

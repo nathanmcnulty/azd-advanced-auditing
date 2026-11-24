@@ -5,7 +5,7 @@
   "requirements": [
     {
       "evidenceState": "code",
-      "scope": "Selected resource group and Automation account",
+      "scope": "Selected subscription metadata, resource group, and Automation account",
       "phase": "deployment",
       "kind": "azure-rbac",
       "evidence": [
@@ -15,15 +15,15 @@
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "ac1edb816224034614cc3212a0a556ee9ed9e6462ebbd21a17e55aec6cc2d48b"
+          "sha256": "485c89b367d96396fe4642a4c82f71235fd516a1186d4a6dbb44ce0f91523a31"
         }
       ],
       "feature": "baseline-deployment",
-      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication; no grant is made by this inventory.",
+      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication. Preprovision and predown also read the selected subscription metadata to require the matching tenant and Enabled state; no grant is made by this inventory.",
       "defaultEnabled": true,
       "resource": "Azure Resource Manager",
       "principal": "Selected deployment operator",
-      "permission": "Solution resource deployment/write permissions (exact custom-role mapping not yet inventoried)"
+      "permission": "Read selected subscription metadata plus solution resource deployment/write permissions (exact custom-role mapping not yet inventoried)"
     },
     {
       "evidenceState": "code",
@@ -110,7 +110,7 @@
       "permission": "Microsoft.Insights/diagnosticSettings/write; Microsoft.Insights/scheduledQueryRules/write; Microsoft.Automation/automationAccounts/variables/write plus selected destination metadata access"
     }
   ],
-  "reviewedOn": "2026-10-10",
+  "reviewedOn": "2026-11-24",
   "gaps": [
     "Baseline deployment custom-role action mapping, lock/delete authority and exact operator scope remain to be inventoried; broad role names are not a grant recommendation.",
     "Existing cached Graph token reads/Exchange service-principal app-role assignment require a complete delegated permission and effective operator-role mapping; source does not declare token scopes.",

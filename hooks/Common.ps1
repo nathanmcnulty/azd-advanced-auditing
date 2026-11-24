@@ -194,6 +194,75 @@ function Get-AuditScopedAccessToken {
   return [string]$accessTokenProperty.Value
 }
 
+function Assert-AuditOperatorSubscriptionEnabled {
+  param([Parameter(Mandatory = $true)][hashtable]$AzdValues)
+
+  $subscriptionId = Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $AzdValues
+  $tenantId = Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $AzdValues
+  $armToken = Get-AuditScopedAccessToken `
+    -ResourceUrl 'https://management.azure.com' `
+    -SubscriptionId $subscriptionId `
+    -TenantId $tenantId
+  $uri = 'https://management.azure.com/subscriptions/{0}?api-version=2022-12-01' -f $subscriptionId
+
+  try {
+    $response = Invoke-WebRequest `
+      -Method GET `
+      -Uri $uri `
+      -Headers @{ Authorization = "Bearer $armToken" } `
+      -MaximumRedirection 0 `
+      -TimeoutSec 30 `
+      -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Could not verify the explicitly selected Azure subscription state.')
+  }
+
+  if ($null -eq $response) {
+    throw (New-AuditOperatorContextException -Message 'Azure returned an incomplete selected-subscription response.')
+  }
+
+  $statusCodeProperty = $response.PSObject.Properties['StatusCode']
+  $contentProperty = $response.PSObject.Properties['Content']
+  $statusCode = 0
+  if ($null -eq $statusCodeProperty -or $null -eq $contentProperty -or
+      -not [int]::TryParse([string]$statusCodeProperty.Value, [ref]$statusCode) -or $statusCode -ne 200 -or
+      $contentProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($contentProperty.Value)) {
+    throw (New-AuditOperatorContextException -Message 'Azure returned an incomplete selected-subscription response.')
+  }
+
+  try {
+    $subscription = $contentProperty.Value | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Azure returned malformed selected-subscription metadata.')
+  }
+
+  if ($null -eq $subscription -or $subscription -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message 'Azure returned malformed selected-subscription metadata.')
+  }
+
+  $idProperty = $subscription.PSObject.Properties['id']
+  $subscriptionIdProperty = $subscription.PSObject.Properties['subscriptionId']
+  $tenantIdProperty = $subscription.PSObject.Properties['tenantId']
+  $stateProperty = $subscription.PSObject.Properties['state']
+  if ($null -eq $idProperty -or $null -eq $subscriptionIdProperty -or
+      $null -eq $tenantIdProperty -or $null -eq $stateProperty -or
+      $idProperty.Value -isnot [string] -or $subscriptionIdProperty.Value -isnot [string] -or
+      $tenantIdProperty.Value -isnot [string] -or $stateProperty.Value -isnot [string] -or
+      [string]$idProperty.Value -ine "/subscriptions/$subscriptionId" -or
+      [string]$subscriptionIdProperty.Value -ine $subscriptionId -or
+      [string]$tenantIdProperty.Value -ine $tenantId -or
+      [string]$stateProperty.Value -cne 'Enabled') {
+    throw (New-AuditOperatorContextException -Message 'Azure subscription metadata does not match the selected target or is not Enabled.')
+  }
+
+  return [pscustomobject]@{
+    SubscriptionId = $subscriptionId
+    TenantId = $tenantId
+  }
+}
+
 function Ensure-PowerShellModule {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -246,10 +315,15 @@ function Get-RunbooksPath {
 }
 
 function Get-AzdEnvironmentValues {
+  param([Parameter(Mandatory = $false)][switch]$RequireSuccess)
+
   Ensure-Command -Name 'azd'
 
   $values = @{}
   $lines = & azd env get-values --no-prompt 2>$null
+  if ($RequireSuccess -and $LASTEXITCODE -ne 0) {
+    throw 'Could not read the selected azd environment values.'
+  }
   foreach ($line in $lines) {
     if ([string]::IsNullOrWhiteSpace($line)) {
       continue
@@ -319,11 +393,15 @@ function Get-EnvironmentSuffix {
 }
 
 function Get-AuditTemplateNames {
-  $azdValues = Get-AzdEnvironmentValues
+  param([Parameter(Mandatory = $false)][hashtable]$AzdValues)
+
+  if ($null -eq $AzdValues) {
+    $AzdValues = Get-AzdEnvironmentValues
+  }
   $environmentName = [System.Environment]::GetEnvironmentVariable('AZURE_ENV_NAME')
   if ([string]::IsNullOrWhiteSpace($environmentName)) {
-    if ($azdValues.ContainsKey('AZURE_ENV_NAME')) {
-      $environmentName = [string]$azdValues['AZURE_ENV_NAME']
+    if ($AzdValues.ContainsKey('AZURE_ENV_NAME')) {
+      $environmentName = [string]$AzdValues['AZURE_ENV_NAME']
     }
   }
 
@@ -340,7 +418,7 @@ function Get-AuditTemplateNames {
     $automationSuffix = $automationSuffix.Substring($automationSuffix.Length - 24)
   }
 
-  $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $azdValues
+  $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $AzdValues
   if ([string]::IsNullOrWhiteSpace($resourceGroupName)) {
     $resourceGroupName = "rg-$environmentName"
   }

@@ -9,8 +9,9 @@ $ErrorActionPreference = 'Stop'
 Write-Section -Message 'Removing the Automation account deletion lock'
 Ensure-Command -Name 'az'
 
-$azdValues = Get-AzdEnvironmentValues
-$subscriptionId = Get-ValueFromEnvironment -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $azdValues
+$azdValues = Get-AzdEnvironmentValues -RequireSuccess
+$target = Assert-AuditOperatorSubscriptionEnabled -AzdValues $azdValues
+$subscriptionId = $target.SubscriptionId
 $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $azdValues
 $automationAccountName = Get-ValueFromEnvironment -Name 'AUTOMATION_ACCOUNT_NAME' -AzdValues $azdValues
 
@@ -21,6 +22,10 @@ if ([string]::IsNullOrWhiteSpace($subscriptionId) -or [string]::IsNullOrWhiteSpa
 $lockId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/providers/Microsoft.Authorization/locks/lock-cannot-delete-automation' -f $subscriptionId, $resourceGroupName, $automationAccountName)
 $lockExists = & az lock show --ids $lockId --subscription $subscriptionId --only-show-errors -o json 2>$null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($lockExists)) {
+  $deleteTarget = Assert-AuditOperatorSubscriptionEnabled -AzdValues (Get-AzdEnvironmentValues -RequireSuccess)
+  if ($deleteTarget.SubscriptionId -ine $target.SubscriptionId -or $deleteTarget.TenantId -ine $target.TenantId) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure target changed before the Automation lock could be removed.')
+  }
   & az lock delete --ids $lockId --subscription $subscriptionId --only-show-errors
   if ($LASTEXITCODE -ne 0) {
     throw "Could not remove Automation account lock '$lockId'."

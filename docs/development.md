@@ -19,6 +19,8 @@ Invoke-Pester -Path .\tests -CI
 
 Postprovision reads the expected `AZURE_SUBSCRIPTION_ID` and `AZURE_TENANT_ID` from the selected azd environment or process environment and rejects conflicting values. Before persisting ownership receipts, it verifies the selected account's subscription-to-tenant mapping. Each supported Azure CLI `account get-access-token` request uses only `--subscription`, which binds token acquisition to that selected account without changing the global Azure CLI default. The hook validates both returned token metadata fields and suppresses raw CLI stderr in favor of fixed diagnostics.
 
+Preprovision and predown also require readable selected azd values and use the shared token guard to read the exact subscription resource from ARM. They proceed only when its subscription ID, tenant ID, and `Enabled` state match the selected target. Predown repeats this check immediately before lock deletion. This is a live service-side status check, not cached CLI state; the shared helper never changes the CLI default.
+
 This token-context check does not validate native Exchange or Purview session tenant, actor, state, or endpoint. It does not qualify the existing cached/browser fallback or the outstanding live acceptance gates.
 
 Key repository paths:
