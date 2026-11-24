@@ -1,5 +1,20 @@
 # Development
 
+## Supported validation toolchain
+
+Maintained PowerShell entry points and runbooks target PowerShell 7.6 or later. Use Pester 6.2.0 or later for the offline test suite; CI installs Pester 6.2.0. The validation workflow also runs PowerShell parsing and PSScriptAnalyzer at Error severity, builds Bicep with CLI 0.46.1, and compares the generated ARM template with `infra/main.json`.
+
+For a local Pester run, use PowerShell 7.6 or later and import a supported Pester version before running the suite:
+
+Before the full suite, make Bicep CLI 0.46.1 available through `$env:AUD_BICEP_PATH` or `$HOME/.azure/bin/bicep.exe` (Windows) / `$HOME/.azure/bin/bicep` (Linux/macOS); the template tests compile `infra/main.bicep`.
+
+```powershell
+$PSVersionTable.PSVersion
+Import-Module Pester -MinimumVersion 6.2.0 -Force
+(Get-Module Pester).Version
+Invoke-Pester -Path .\tests -CI
+```
+
 Key repository paths:
 
 | Path | Purpose |
