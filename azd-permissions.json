@@ -15,7 +15,7 @@
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "bb72529de39d90445ce488b98d885352f77822503f3c88cdd8ffc15cb57e5f9a"
+          "sha256": "baac74daca208a23c0d63bdd8b7bbb3cb1a952b6e47366779bad06a173859a44"
         }
       ],
       "feature": "baseline-deployment",
@@ -33,7 +33,7 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "5b0cd2f4d647570102e4a411c83dabd2f25c49cf0e9a569d35cb40b71d329a46"
+          "sha256": "b2385f9d4995f39dd0c99473e7f86fd73eb8236fe55c29043a4c91af2853bad4"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
@@ -55,7 +55,7 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "5b0cd2f4d647570102e4a411c83dabd2f25c49cf0e9a569d35cb40b71d329a46"
+          "sha256": "b2385f9d4995f39dd0c99473e7f86fd73eb8236fe55c29043a4c91af2853bad4"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
@@ -99,7 +99,7 @@
         },
         {
           "path": "hooks/AuditOperationalState.ps1",
-          "sha256": "fbe5ddde2d7e92082b4d1065af08664db55a96500d5f6e3f889a5044420afa9c"
+          "sha256": "6d211140085769f9aa68c365fa0c92977af5acbae93a8663aaa1b9d2fc95bce5"
         }
       ],
       "feature": "operational-alerts",

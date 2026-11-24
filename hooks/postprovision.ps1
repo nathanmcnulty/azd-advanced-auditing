@@ -38,21 +38,17 @@ function Invoke-GraphRest {
 function Get-AzCliAccessToken {
   param([Parameter(Mandatory = $true)][string]$ResourceUrl)
 
-  $token = & az account get-access-token --resource $ResourceUrl --query accessToken -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($token)) {
-    throw "Could not acquire an Azure CLI access token for resource '$ResourceUrl'."
-  }
-
-  return $token.Trim()
+  return Get-AuditScopedAccessToken `
+    -ResourceUrl $ResourceUrl `
+    -SubscriptionId $script:AuditOperatorSubscriptionId `
+    -TenantId $script:AuditOperatorTenantId
 }
 
 function Get-AzCliUserPrincipalName {
-  $upn = & az account show --query user.name -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($upn)) {
-    throw 'Could not determine the signed-in Azure CLI user principal name.'
-  }
-
-  return $upn.Trim()
+  $account = Get-AuditOperatorAccount `
+    -SubscriptionId $script:AuditOperatorSubscriptionId `
+    -TenantId $script:AuditOperatorTenantId
+  return [string]$account.user.name
 }
 
 function Connect-ExchangeForBootstrap {
@@ -63,6 +59,7 @@ function Connect-ExchangeForBootstrap {
     Connect-ExchangeOnline -AccessToken $outlookToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
   }
   catch {
+    if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
     Write-Warning "Exchange Online access-token auth was unavailable. Trying the normal cached account or browser sign-in for '$upn'."
     try {
       Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false | Out-Null
@@ -114,6 +111,7 @@ function Get-ExchangeOrganizationDomain {
     }
   }
   catch {
+    if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
     Write-Warning "Graph domain lookup failed: $($_.Exception.Message)"
   }
 
@@ -293,7 +291,10 @@ function Ensure-AuditRetentionPolicy {
 
 Write-Section -Message 'Loading azd environment values'
 $azdValues = Get-AzdEnvironmentValues
-$subscriptionId = Get-ValueFromEnvironment -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $azdValues
+$subscriptionId = Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $azdValues
+$tenantId = Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $azdValues
+$script:AuditOperatorSubscriptionId = $subscriptionId
+$script:AuditOperatorTenantId = $tenantId
 $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $azdValues
 $automationAccountName = Get-ValueFromEnvironment -Name 'AUTOMATION_ACCOUNT_NAME' -AzdValues $azdValues
 $managedIdentityObjectId = Get-ValueFromEnvironment -Name 'AUTOMATION_PRINCIPAL_ID' -AzdValues $azdValues
@@ -302,9 +303,14 @@ $validateConfigurationRunbookName = Get-ValueFromEnvironment -Name 'VALIDATE_CON
 $exchangeOrganizationVariableName = Get-ValueFromEnvironment -Name 'EXCHANGE_ORGANIZATION_VARIABLE_NAME' -AzdValues $azdValues
 $jobScheduleId = Get-ValueFromEnvironment -Name 'AUTOMATION_JOB_SCHEDULE_ID' -AzdValues $azdValues
 
-if ([string]::IsNullOrWhiteSpace($subscriptionId) -or [string]::IsNullOrWhiteSpace($resourceGroupName) -or [string]::IsNullOrWhiteSpace($automationAccountName) -or [string]::IsNullOrWhiteSpace($managedIdentityObjectId) -or [string]::IsNullOrWhiteSpace($jobScheduleId)) {
+if ([string]::IsNullOrWhiteSpace($resourceGroupName) -or [string]::IsNullOrWhiteSpace($automationAccountName) -or [string]::IsNullOrWhiteSpace($managedIdentityObjectId) -or [string]::IsNullOrWhiteSpace($jobScheduleId)) {
   throw 'Required azd environment values were not found after provision.'
 }
+
+# Bind the operator's cached Azure CLI identity to the selected environment before
+# any ownership receipt is persisted. This reads only scoped account/token metadata.
+$operatorAccount = Get-AuditOperatorAccount -SubscriptionId $subscriptionId -TenantId $tenantId
+Get-AuditScopedAccessToken -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceUrl 'https://management.azure.com' | Out-Null
 
 Write-Section -Message 'Recording provisioned Automation ownership'
 Ensure-Command -Name 'az'
@@ -366,13 +372,14 @@ if ($complianceConnected) {
   try {
     Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
   } catch {
-    if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+    if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
+    if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
     throw
   }
-  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupVerified' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupVerified' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
 }
 else {
-  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupUnavailable' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupUnavailable' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
   $retentionWarning = "Unified audit log retention policy bootstrap was skipped because Security & Compliance PowerShell authentication was not available. Configure and validate '$retentionPolicyName' manually."
   $degradedConditions.Add($retentionWarning)
   Write-Warning $retentionWarning
@@ -387,6 +394,7 @@ Ensure-RoleGroupMembership -ManagedIdentityObjectId $managedIdentityObjectId
 Write-Section -Message 'Persisting automation variables'
 Set-AutomationVariableValue `
   -SubscriptionId $subscriptionId `
+  -TenantId $tenantId `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
   -VariableName $exchangeOrganizationVariableName `
@@ -442,6 +450,7 @@ try {
   Start-AutomationRunbookAndWait @runbookStartParameters | Out-Null
 }
 catch {
+  if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
   $runbookFailures.Add("Advanced auditing remediation failed: $($_.Exception.Message)")
   Write-Warning $runbookFailures[$runbookFailures.Count - 1]
 }

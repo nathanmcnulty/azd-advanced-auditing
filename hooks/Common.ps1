@@ -16,6 +16,162 @@ function Ensure-Command {
   }
 }
 
+function New-AuditOperatorContextException {
+  param([Parameter(Mandatory = $true)][string]$Message)
+
+  $exception = [System.InvalidOperationException]::new($Message)
+  $exception.Data['AuditOperatorContext'] = $true
+  return $exception
+}
+
+function Test-AuditOperatorContextException {
+  param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+  $exception = $ErrorRecord
+  if ($ErrorRecord.PSObject.Properties.Match('Exception').Count -gt 0) {
+    $exception = $ErrorRecord.Exception
+  }
+
+  while ($null -ne $exception) {
+    if ($exception.Data -and $exception.Data['AuditOperatorContext'] -eq $true) {
+      return $true
+    }
+    $exception = $exception.InnerException
+  }
+
+  return $false
+}
+
+function Get-AuditOperatorTargetSelector {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][hashtable]$AzdValues
+  )
+
+  $upperName = $Name.ToUpperInvariant()
+  $environmentValue = ''
+  if ($AzdValues.ContainsKey($upperName)) {
+    $environmentValue = ([string]$AzdValues[$upperName]).Trim()
+  }
+  $processValue = ([System.Environment]::GetEnvironmentVariable($Name) ?? '').Trim()
+
+  if (-not [string]::IsNullOrWhiteSpace($environmentValue) -and
+      -not [string]::IsNullOrWhiteSpace($processValue) -and
+      -not [string]::Equals($environmentValue, $processValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw (New-AuditOperatorContextException -Message "The process and selected azd values for '$Name' do not match.")
+  }
+
+  $value = if (-not [string]::IsNullOrWhiteSpace($processValue)) { $processValue } else { $environmentValue }
+  $parsedId = [guid]::Empty
+  if ([string]::IsNullOrWhiteSpace($value) -or -not [guid]::TryParse($value, [ref]$parsedId)) {
+    throw (New-AuditOperatorContextException -Message "An explicit GUID for '$Name' is required in the selected azd environment or process environment.")
+  }
+
+  return $parsedId.ToString()
+}
+
+function Get-AuditOperatorAccount {
+  param(
+    [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$TenantId
+  )
+
+  $parsedSubscriptionId = [guid]::Empty
+  $parsedTenantId = [guid]::Empty
+  if (-not [guid]::TryParse($SubscriptionId, [ref]$parsedSubscriptionId) -or
+      -not [guid]::TryParse($TenantId, [ref]$parsedTenantId)) {
+    throw (New-AuditOperatorContextException -Message 'Explicit Azure CLI subscription and tenant selectors must be GUIDs.')
+  }
+  $SubscriptionId = $parsedSubscriptionId.ToString()
+  $TenantId = $parsedTenantId.ToString()
+
+  try {
+    Ensure-Command -Name 'az'
+    $accountJson = & az account show --subscription $SubscriptionId --only-show-errors --output json
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Could not read the explicitly selected Azure CLI account.')
+  }
+
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) {
+    throw (New-AuditOperatorContextException -Message 'Could not read the explicitly selected Azure CLI account.')
+  }
+
+  try {
+    $account = $accountJson | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account metadata.')
+  }
+
+  $accountIdProperty = $account.PSObject.Properties['id']
+  $tenantIdProperty = $account.PSObject.Properties['tenantId']
+  $userProperty = $account.PSObject.Properties['user']
+  $userNameProperty = if ($null -ne $userProperty -and $null -ne $userProperty.Value) {
+    $userProperty.Value.PSObject.Properties['name']
+  }
+  if ($null -eq $accountIdProperty -or $null -eq $tenantIdProperty -or $null -eq $userNameProperty -or
+      [string]$accountIdProperty.Value -ine $SubscriptionId -or [string]$tenantIdProperty.Value -ine $TenantId -or
+      [string]::IsNullOrWhiteSpace([string]$userNameProperty.Value)) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI account metadata does not match the explicit subscription and tenant selectors.')
+  }
+
+  return $account
+}
+
+function Get-AuditScopedAccessToken {
+  param(
+    [Parameter(Mandatory = $true)][string]$ResourceUrl,
+    [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$TenantId
+  )
+
+  $parsedSubscriptionId = [guid]::Empty
+  $parsedTenantId = [guid]::Empty
+  if (-not [guid]::TryParse($SubscriptionId, [ref]$parsedSubscriptionId) -or
+      -not [guid]::TryParse($TenantId, [ref]$parsedTenantId)) {
+    throw (New-AuditOperatorContextException -Message 'Explicit Azure CLI subscription and tenant selectors must be GUIDs.')
+  }
+  $SubscriptionId = $parsedSubscriptionId.ToString()
+  $TenantId = $parsedTenantId.ToString()
+
+  try {
+    Ensure-Command -Name 'az'
+    $tokenJson = & az account get-access-token `
+      --subscription $SubscriptionId `
+      --tenant $TenantId `
+      --resource $ResourceUrl `
+      --only-show-errors `
+      --output json
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message "Could not acquire a scoped Azure CLI token for '$ResourceUrl'.")
+  }
+
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tokenJson)) {
+    throw (New-AuditOperatorContextException -Message "Could not acquire a scoped Azure CLI token for '$ResourceUrl'.")
+  }
+
+  try {
+    $tokenResponse = $tokenJson | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message "Azure CLI returned malformed token metadata for '$ResourceUrl'.")
+  }
+
+  $accessTokenProperty = $tokenResponse.PSObject.Properties['accessToken']
+  $subscriptionProperty = $tokenResponse.PSObject.Properties['subscription']
+  $tenantProperty = $tokenResponse.PSObject.Properties['tenant']
+  if ($null -eq $accessTokenProperty -or $null -eq $subscriptionProperty -or $null -eq $tenantProperty -or
+      [string]::IsNullOrWhiteSpace([string]$accessTokenProperty.Value) -or
+      [string]$subscriptionProperty.Value -ine $SubscriptionId -or
+      [string]$tenantProperty.Value -ine $TenantId) {
+    throw (New-AuditOperatorContextException -Message "Azure CLI token metadata does not match the explicit subscription and tenant selectors for '$ResourceUrl'.")
+  }
+
+  return [string]$accessTokenProperty.Value
+}
+
 function Ensure-PowerShellModule {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -182,6 +338,7 @@ function ConvertTo-AutomationVariableLiteral {
 function Set-AutomationVariableValue {
   param(
     [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$TenantId,
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$VariableName,
@@ -197,10 +354,10 @@ function Set-AutomationVariableValue {
     }
   } | ConvertTo-Json -Depth 5 -Compress
 
-  $armToken = & az account get-access-token --resource https://management.azure.com --query accessToken -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($armToken)) {
-    throw 'Could not acquire an Azure Resource Manager access token from Azure CLI.'
-  }
+  $armToken = Get-AuditScopedAccessToken `
+    -SubscriptionId $SubscriptionId `
+    -TenantId $TenantId `
+    -ResourceUrl 'https://management.azure.com'
 
   Invoke-RestMethod `
     -Method PUT `

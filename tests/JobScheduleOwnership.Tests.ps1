@@ -1,5 +1,6 @@
 Describe 'Automation jobSchedule ownership' {
   BeforeAll {
+    . (Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1')
     . (Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/JobScheduleOwnership.ps1')
     $script:accountId = '/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Automation/automationAccounts/aa-1'
     $script:principalId = '11111111-1111-1111-1111-111111111111'
@@ -68,6 +69,7 @@ Describe 'Automation jobSchedule ownership' {
 
 Describe 'Exchange bootstrap fallback' {
   BeforeAll {
+    . (Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1')
     $path = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/postprovision.ps1'
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)

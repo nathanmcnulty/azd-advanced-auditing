@@ -19,10 +19,13 @@ Install [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-
 From a new empty directory, run:
 
 ```powershell
-azd init -t nathanmcnulty/azd-advanced-auditing && azd up
+azd init -t nathanmcnulty/azd-advanced-auditing
+azd env set AZURE_SUBSCRIPTION_ID "<expected-subscription-guid>"
+azd env set AZURE_TENANT_ID "<expected-tenant-guid>"
+azd up
 ```
 
-The hooks reuse normal cached or browser authentication. The deployment installs ExchangeOnlineManagement 3.10.1 or later for the current user when needed; administrators do not need Node.js or a local application build toolchain.
+The hooks bind Azure CLI token requests to the selected environment's explicit subscription and tenant and stop if the returned token metadata differs. They leave the global Azure CLI default unchanged and reuse normal cached or browser authentication. The deployment installs ExchangeOnlineManagement 3.10.1 or later for the current user when needed; administrators do not need Node.js or a local application build toolchain.
 
 ## What gets deployed
 
