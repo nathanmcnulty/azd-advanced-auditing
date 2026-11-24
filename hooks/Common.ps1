@@ -87,7 +87,7 @@ function Get-AuditOperatorAccount {
 
   try {
     Ensure-Command -Name 'az'
-    $accountJson = & az account show --subscription $SubscriptionId --only-show-errors --output json
+    $accountJson = & az account show --subscription $SubscriptionId --only-show-errors --output json 2>$null
   }
   catch {
     throw (New-AuditOperatorContextException -Message 'Could not read the explicitly selected Azure CLI account.')
@@ -104,15 +104,22 @@ function Get-AuditOperatorAccount {
     throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account metadata.')
   }
 
+  if ($null -eq $account -or $account -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account metadata.')
+  }
+
   $accountIdProperty = $account.PSObject.Properties['id']
   $tenantIdProperty = $account.PSObject.Properties['tenantId']
   $userProperty = $account.PSObject.Properties['user']
-  $userNameProperty = if ($null -ne $userProperty -and $null -ne $userProperty.Value) {
+  $userNameProperty = if ($null -ne $userProperty -and
+      $userProperty.Value -is [System.Management.Automation.PSCustomObject]) {
     $userProperty.Value.PSObject.Properties['name']
   }
   if ($null -eq $accountIdProperty -or $null -eq $tenantIdProperty -or $null -eq $userNameProperty -or
+      $accountIdProperty.Value -isnot [string] -or $tenantIdProperty.Value -isnot [string] -or
+      $userNameProperty.Value -isnot [string] -or
       [string]$accountIdProperty.Value -ine $SubscriptionId -or [string]$tenantIdProperty.Value -ine $TenantId -or
-      [string]::IsNullOrWhiteSpace([string]$userNameProperty.Value)) {
+      [string]::IsNullOrWhiteSpace($userNameProperty.Value)) {
     throw (New-AuditOperatorContextException -Message 'Azure CLI account metadata does not match the explicit subscription and tenant selectors.')
   }
 
@@ -134,15 +141,31 @@ function Get-AuditScopedAccessToken {
   }
   $SubscriptionId = $parsedSubscriptionId.ToString()
   $TenantId = $parsedTenantId.ToString()
+  $subscriptionScopedResource = $ResourceUrl -eq 'https://management.azure.com'
+  if ($ResourceUrl -notin @(
+      'https://management.azure.com',
+      'https://graph.microsoft.com',
+      'https://outlook.office365.com',
+      'https://ps.compliance.protection.outlook.com'
+    )) {
+    throw (New-AuditOperatorContextException -Message 'The requested Azure CLI token audience is not supported by this hook.')
+  }
+
+  # Azure CLI resolves the subscription-to-tenant mapping here. Its token command
+  # accepts exactly one of --subscription or --tenant, never both.
+  $null = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
 
   try {
     Ensure-Command -Name 'az'
-    $tokenJson = & az account get-access-token `
-      --subscription $SubscriptionId `
-      --tenant $TenantId `
-      --resource $ResourceUrl `
-      --only-show-errors `
-      --output json
+    $tokenArguments = @('account', 'get-access-token')
+    if ($subscriptionScopedResource) {
+      $tokenArguments += @('--subscription', $SubscriptionId)
+    }
+    else {
+      $tokenArguments += @('--tenant', $TenantId)
+    }
+    $tokenArguments += @('--resource', $ResourceUrl, '--only-show-errors', '--output', 'json')
+    $tokenJson = & az @tokenArguments 2>$null
   }
   catch {
     throw (New-AuditOperatorContextException -Message "Could not acquire a scoped Azure CLI token for '$ResourceUrl'.")
@@ -159,13 +182,24 @@ function Get-AuditScopedAccessToken {
     throw (New-AuditOperatorContextException -Message "Azure CLI returned malformed token metadata for '$ResourceUrl'.")
   }
 
+  if ($null -eq $tokenResponse -or $tokenResponse -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message "Azure CLI returned malformed token metadata for '$ResourceUrl'.")
+  }
+
   $accessTokenProperty = $tokenResponse.PSObject.Properties['accessToken']
   $subscriptionProperty = $tokenResponse.PSObject.Properties['subscription']
   $tenantProperty = $tokenResponse.PSObject.Properties['tenant']
-  if ($null -eq $accessTokenProperty -or $null -eq $subscriptionProperty -or $null -eq $tenantProperty -or
-      [string]::IsNullOrWhiteSpace([string]$accessTokenProperty.Value) -or
-      [string]$subscriptionProperty.Value -ine $SubscriptionId -or
-      [string]$tenantProperty.Value -ine $TenantId) {
+  $invalidSubscriptionMetadata = if ($subscriptionScopedResource) {
+    $null -eq $subscriptionProperty -or $subscriptionProperty.Value -isnot [string] -or
+      [string]$subscriptionProperty.Value -ine $SubscriptionId
+  }
+  else {
+    $null -eq $subscriptionProperty -or $null -ne $subscriptionProperty.Value
+  }
+  if ($null -eq $accessTokenProperty -or $null -eq $tenantProperty -or
+      $accessTokenProperty.Value -isnot [string] -or $tenantProperty.Value -isnot [string] -or
+      [string]::IsNullOrWhiteSpace($accessTokenProperty.Value) -or
+      [string]$tenantProperty.Value -ine $TenantId -or $invalidSubscriptionMetadata) {
     throw (New-AuditOperatorContextException -Message "Azure CLI token metadata does not match the explicit subscription and tenant selectors for '$ResourceUrl'.")
   }
 

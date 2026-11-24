@@ -15,7 +15,7 @@
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "baac74daca208a23c0d63bdd8b7bbb3cb1a952b6e47366779bad06a173859a44"
+          "sha256": "59b04cca137e6a7e63c8eea3e9758b3a363145b72aada0b79ae06bb344a301bb"
         }
       ],
       "feature": "baseline-deployment",
@@ -33,7 +33,7 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "b2385f9d4995f39dd0c99473e7f86fd73eb8236fe55c29043a4c91af2853bad4"
+          "sha256": "77cec1aaada6b5a1de2f433b6163c0f920e6ed2c785748c5ff3a572ff87ba211"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
@@ -55,7 +55,7 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "b2385f9d4995f39dd0c99473e7f86fd73eb8236fe55c29043a4c91af2853bad4"
+          "sha256": "77cec1aaada6b5a1de2f433b6163c0f920e6ed2c785748c5ff3a572ff87ba211"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",

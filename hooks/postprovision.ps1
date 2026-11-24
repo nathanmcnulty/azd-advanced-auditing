@@ -308,8 +308,7 @@ if ([string]::IsNullOrWhiteSpace($resourceGroupName) -or [string]::IsNullOrWhite
 }
 
 # Bind the operator's cached Azure CLI identity to the selected environment before
-# any ownership receipt is persisted. This reads only scoped account/token metadata.
-$operatorAccount = Get-AuditOperatorAccount -SubscriptionId $subscriptionId -TenantId $tenantId
+# any ownership receipt is persisted. The token helper verifies account mapping first.
 Get-AuditScopedAccessToken -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceUrl 'https://management.azure.com' | Out-Null
 
 Write-Section -Message 'Recording provisioned Automation ownership'
