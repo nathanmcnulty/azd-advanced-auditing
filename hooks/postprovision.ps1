@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path -Path $PSScriptRoot -ChildPath 'Common.ps1')
 . (Join-Path -Path $PSScriptRoot -ChildPath 'JobScheduleOwnership.ps1')
+. (Join-Path -Path $PSScriptRoot -ChildPath 'AuditOperationalState.ps1')
 
 function Invoke-GraphRest {
   param(
@@ -80,7 +81,7 @@ function Connect-ComplianceForBootstrap {
 
   try {
     Connect-IPPSSession -AccessToken $complianceToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
-    return
+    return $true
   }
   catch {
     Write-Warning "Security & Compliance PowerShell access-token auth with UserPrincipalName failed. Retrying with Organization. Error: $($_.Exception.Message)"
@@ -346,10 +347,32 @@ if (-not $adminAuditConfig.UnifiedAuditLogIngestionEnabled) {
 }
 
 $retentionPolicyName = 'All Records - 1 Year'
-if ($complianceConnected) {
-  Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
+$operationalAlertsEnabled = $false
+# This optional resource flag must use the deployed azd output, never the
+# process-first environment override used by general bootstrap inputs.
+$hasOperationalAlertsOutput = $azdValues.ContainsKey('OPERATIONAL_ALERTS_ENABLED')
+if ($hasOperationalAlertsOutput) {
+  $operationalAlertsValue = $azdValues['OPERATIONAL_ALERTS_ENABLED']
+  if (-not [bool]::TryParse([string]$operationalAlertsValue, [ref]$operationalAlertsEnabled)) {
+    throw 'Deployed OPERATIONAL_ALERTS_ENABLED output is invalid; optional state persistence cannot be selected safely.'
+  }
 }
 else {
+  # Older deployments do not have this template output. Keep hook-only updates
+  # working and leave optional monitoring state unwritten for those deployments.
+  Write-Verbose 'Deployed OPERATIONAL_ALERTS_ENABLED output is absent; treating optional monitoring as disabled for backward compatibility.'
+}
+if ($complianceConnected) {
+  try {
+    Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
+  } catch {
+    if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+    throw
+  }
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupVerified' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+}
+else {
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupUnavailable' -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
   $retentionWarning = "Unified audit log retention policy bootstrap was skipped because Security & Compliance PowerShell authentication was not available. Configure and validate '$retentionPolicyName' manually."
   $degradedConditions.Add($retentionWarning)
   Write-Warning $retentionWarning
@@ -402,14 +425,21 @@ Start-AutomationRunbookAndWait `
   -RunbookName $validateConnectionRunbookName | Out-Null
 
 $runbookFailures = [System.Collections.Generic.List[string]]::new()
+$runbookStartParameters = @{
+  SubscriptionId = $subscriptionId
+  ResourceGroupName = $resourceGroupName
+  AutomationAccountName = $automationAccountName
+  RunbookName = 'Enable-AdvancedAuditing'
+}
+if ($hasOperationalAlertsOutput) {
+  $runbookStartParameters.Parameters = @{
+    OperationalAlertsEnabled = $operationalAlertsEnabled.ToString().ToLowerInvariant()
+  }
+}
 
 Write-Section -Message 'Running advanced auditing remediation runbook'
 try {
-  Start-AutomationRunbookAndWait `
-    -SubscriptionId $subscriptionId `
-    -ResourceGroupName $resourceGroupName `
-    -AutomationAccountName $automationAccountName `
-    -RunbookName 'Enable-AdvancedAuditing' | Out-Null
+  Start-AutomationRunbookAndWait @runbookStartParameters | Out-Null
 }
 catch {
   $runbookFailures.Add("Advanced auditing remediation failed: $($_.Exception.Message)")
