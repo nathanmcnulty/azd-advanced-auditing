@@ -6,6 +6,8 @@ Maintained PowerShell entry points and runbooks target PowerShell 7.6 or later. 
 
 For a local Pester run, use PowerShell 7.6 or later and import a supported Pester version before running the suite:
 
+Before the full suite, make Bicep CLI 0.46.1 available through `$env:AUD_BICEP_PATH` or `$HOME/.azure/bin/bicep.exe` (Windows) / `$HOME/.azure/bin/bicep` (Linux/macOS); the template tests compile `infra/main.bicep`.
+
 ```powershell
 $PSVersionTable.PSVersion
 Import-Module Pester -MinimumVersion 6.2.0 -Force
