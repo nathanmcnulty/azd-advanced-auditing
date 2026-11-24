@@ -32,6 +32,8 @@ BeforeAll {
       Write-Error 'SYNTHETIC_TOKEN_STDERR_SECRET' -ErrorAction Continue
     }
     if ($args[0] -eq 'account' -and $args[1] -eq 'show') {
+      $accountSubscription = if ($hasSubscription) { $global:OperatorTokenFixture.AccountSubscription } else { $global:OperatorTokenFixture.AmbientSubscription }
+      $accountTenant = if ($hasSubscription) { $global:OperatorTokenFixture.AccountTenant } else { $global:OperatorTokenFixture.AmbientTenant }
       if ($global:OperatorTokenFixture.AccountExitCode -ne 0) {
         $global:LASTEXITCODE = $global:OperatorTokenFixture.AccountExitCode
       }
@@ -39,12 +41,14 @@ BeforeAll {
         return $global:OperatorTokenFixture.AccountJsonOverride
       }
       return ([pscustomobject]@{
-        id = $global:OperatorTokenFixture.AccountSubscription
-        tenantId = $global:OperatorTokenFixture.AccountTenant
+        id = $accountSubscription
+        tenantId = $accountTenant
         user = [pscustomobject]@{ name = 'operator@example.test' }
       } | ConvertTo-Json -Compress)
     }
     if ($args[0] -eq 'account' -and $args[1] -eq 'get-access-token') {
+      $tokenSubscription = if ($hasSubscription) { $global:OperatorTokenFixture.TokenSubscription } else { $global:OperatorTokenFixture.AmbientSubscription }
+      $tokenTenant = if ($hasSubscription) { $global:OperatorTokenFixture.TokenTenant } else { $global:OperatorTokenFixture.AmbientTenant }
       if ($global:OperatorTokenFixture.TokenExitCode -ne 0) {
         $global:LASTEXITCODE = $global:OperatorTokenFixture.TokenExitCode
       }
@@ -53,8 +57,8 @@ BeforeAll {
       }
       return ([pscustomobject]@{
         accessToken = 'offline-test-token'
-        subscription = $global:OperatorTokenFixture.TokenSubscription
-        tenant = $global:OperatorTokenFixture.TokenTenant
+        subscription = $tokenSubscription
+        tenant = $tokenTenant
       } | ConvertTo-Json -Compress)
     }
     $global:LASTEXITCODE = 2
@@ -68,9 +72,11 @@ Describe 'Explicit operator selectors and scoped token metadata' {
     $script:tenantId = '22222222-2222-2222-2222-222222222222'
     $global:OperatorTokenFixture = [pscustomobject]@{
       Calls = [Collections.Generic.List[object]]::new()
+      AmbientSubscription = '33333333-3333-3333-3333-333333333333'
+      AmbientTenant = '44444444-4444-4444-4444-444444444444'
       AccountSubscription = $script:subscriptionId
       AccountTenant = $script:tenantId
-      TokenSubscription = $null
+      TokenSubscription = $script:subscriptionId
       TokenTenant = $script:tenantId
       AccountJsonOverride = ''
       TokenJsonOverride = ''
@@ -107,38 +113,39 @@ Describe 'Explicit operator selectors and scoped token metadata' {
     @($global:OperatorTokenFixture.Calls[0].Args) | Should -Contain $script:subscriptionId
   }
 
-  It 'requests a token with explicit selectors and returns only the token value to its caller' {
+  It 'requests a Graph token with the explicit subscription and returns only the token value' {
     $token = Get-AuditScopedAccessToken -ResourceUrl 'https://graph.microsoft.com' -SubscriptionId $script:subscriptionId -TenantId $script:tenantId
     $token | Should -BeExactly 'offline-test-token'
     $accountArgs = @($global:OperatorTokenFixture.Calls[0].Args)
     $tokenArgs = @($global:OperatorTokenFixture.Calls[-1].Args)
     $accountArgs | Should -Contain '--subscription'
     $accountArgs | Should -Contain $script:subscriptionId
-    $tokenArgs | Should -Not -Contain '--subscription'
-    $tokenArgs | Should -Contain '--tenant'
-    $tokenArgs | Should -Contain $script:tenantId
-    $tokenArgs | Should -Contain '--resource'
-    $tokenArgs | Should -Contain 'https://graph.microsoft.com'
-    $global:OperatorTokenFixture.TokenSubscription | Should -BeNullOrEmpty
-  }
-
-  It 'requests an ARM token with subscription only and verifies both metadata fields' {
-    $global:OperatorTokenFixture.TokenSubscription = $script:subscriptionId
-    $token = Get-AuditScopedAccessToken -ResourceUrl 'https://management.azure.com' -SubscriptionId $script:subscriptionId -TenantId $script:tenantId
-    $token | Should -BeExactly 'offline-test-token'
-    $tokenArgs = @($global:OperatorTokenFixture.Calls[-1].Args)
     $tokenArgs | Should -Contain '--subscription'
     $tokenArgs | Should -Contain $script:subscriptionId
     $tokenArgs | Should -Not -Contain '--tenant'
-    $tokenArgs | Should -Contain 'https://management.azure.com'
+    $tokenArgs | Should -Contain '--resource'
+    $tokenArgs | Should -Contain 'https://graph.microsoft.com'
+    $global:OperatorTokenFixture.TokenSubscription | Should -BeExactly $script:subscriptionId
+    $global:OperatorTokenFixture.AmbientSubscription | Should -Not -BeExactly $script:subscriptionId
+    $global:OperatorTokenFixture.AmbientTenant | Should -Not -BeExactly $script:tenantId
   }
 
-  It 'rejects unexpected subscription metadata from a tenant-scoped token request' {
-    $global:OperatorTokenFixture.TokenSubscription = $script:subscriptionId
-    try { Get-AuditScopedAccessToken -ResourceUrl 'https://graph.microsoft.com' -SubscriptionId $script:subscriptionId -TenantId $script:tenantId; throw 'Expected a tenant-scoped token response.' }
-    catch {
-      $_.Exception.Data['AuditOperatorContext'] | Should -BeTrue
-      $_.Exception.Message | Should -Match 'metadata does not match'
+  It 'uses only the selected subscription for every vetted token audience, not the ambient account' {
+    foreach ($resource in @(
+        'https://management.azure.com',
+        'https://graph.microsoft.com',
+        'https://outlook.office365.com',
+        'https://ps.compliance.protection.outlook.com'
+      )) {
+      $global:OperatorTokenFixture.Calls.Clear()
+      $token = Get-AuditScopedAccessToken -ResourceUrl $resource -SubscriptionId $script:subscriptionId -TenantId $script:tenantId
+      $token | Should -BeExactly 'offline-test-token'
+      $tokenArgs = @($global:OperatorTokenFixture.Calls[-1].Args)
+      $tokenArgs | Should -Contain '--subscription'
+      $tokenArgs | Should -Contain $script:subscriptionId
+      $tokenArgs | Should -Not -Contain '--tenant'
+      $tokenArgs | Should -Contain '--resource'
+      $tokenArgs | Should -Contain $resource
     }
   }
 
@@ -156,16 +163,38 @@ Describe 'Explicit operator selectors and scoped token metadata' {
     { Get-AuditScopedAccessToken -ResourceUrl 'https://management.azure.com' -SubscriptionId $script:subscriptionId -TenantId $script:tenantId } | Should -Throw '*metadata does not match*'
   }
 
-  It 'tags JSON null and array account responses as operator-context failures' {
-    foreach ($response in @('null', '[]')) {
+  It 'rejects account JSON null, scalar, empty and singleton arrays, and wrong property types' {
+    $validAccount = [pscustomobject]@{
+      id = $script:subscriptionId
+      tenantId = $script:tenantId
+      user = [pscustomobject]@{ name = 'operator@example.test' }
+    }
+    $singleAccountArray = ConvertTo-Json -InputObject @($validAccount) -Compress
+    $wrongTypeAccount = ConvertTo-Json -InputObject ([pscustomobject]@{
+      id = 42
+      tenantId = $script:tenantId
+      user = [pscustomobject]@{ name = 'operator@example.test' }
+    }) -Compress
+    foreach ($response in @('null', '"not-an-object"', '[]', $singleAccountArray, $wrongTypeAccount)) {
       $global:OperatorTokenFixture.AccountJsonOverride = $response
       try { Get-AuditOperatorAccount -SubscriptionId $script:subscriptionId -TenantId $script:tenantId; throw 'Expected malformed account metadata.' }
       catch { $_.Exception.Data['AuditOperatorContext'] | Should -BeTrue }
     }
   }
 
-  It 'tags JSON null and array token responses as operator-context failures' {
-    foreach ($response in @('null', '[]')) {
+  It 'rejects token JSON null, scalar, empty and singleton arrays, and wrong property types' {
+    $validToken = [pscustomobject]@{
+      accessToken = 'offline-test-token'
+      subscription = $script:subscriptionId
+      tenant = $script:tenantId
+    }
+    $singleTokenArray = ConvertTo-Json -InputObject @($validToken) -Compress
+    $wrongTypeToken = ConvertTo-Json -InputObject ([pscustomobject]@{
+      accessToken = 123
+      subscription = $script:subscriptionId
+      tenant = $script:tenantId
+    }) -Compress
+    foreach ($response in @('null', '"not-an-object"', '[]', $singleTokenArray, $wrongTypeToken)) {
       $global:OperatorTokenFixture.TokenJsonOverride = $response
       try { Get-AuditScopedAccessToken -ResourceUrl 'https://graph.microsoft.com' -SubscriptionId $script:subscriptionId -TenantId $script:tenantId; throw 'Expected malformed token metadata.' }
       catch { $_.Exception.Data['AuditOperatorContext'] | Should -BeTrue }
@@ -199,9 +228,11 @@ Describe 'Actual postprovision and Common token consumers' {
     $script:tenantId = '22222222-2222-2222-2222-222222222222'
     $global:OperatorTokenFixture = [pscustomobject]@{
       Calls = [Collections.Generic.List[object]]::new()
+      AmbientSubscription = '33333333-3333-3333-3333-333333333333'
+      AmbientTenant = '44444444-4444-4444-4444-444444444444'
       AccountSubscription = $script:subscriptionId
       AccountTenant = $script:tenantId
-      TokenSubscription = $null
+      TokenSubscription = $script:subscriptionId
       TokenTenant = $script:tenantId
       AccountJsonOverride = ''
       TokenJsonOverride = ''
@@ -236,9 +267,9 @@ Describe 'Actual postprovision and Common token consumers' {
       $global:OperatorTokenFixture.HttpCalls.Count | Should -Be 1
       $global:OperatorTokenFixture.HttpCalls[0].Authorization | Should -BeExactly 'Bearer offline-test-token'
       $tokenArgs = @($global:OperatorTokenFixture.Calls[-1].Args)
-      $tokenArgs | Should -Not -Contain '--subscription'
-      $tokenArgs | Should -Contain '--tenant'
-      $tokenArgs | Should -Contain $script:tenantId
+      $tokenArgs | Should -Contain '--subscription'
+      $tokenArgs | Should -Contain $script:subscriptionId
+      $tokenArgs | Should -Not -Contain '--tenant'
     }
   }
 

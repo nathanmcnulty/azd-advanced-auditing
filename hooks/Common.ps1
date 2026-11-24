@@ -98,7 +98,7 @@ function Get-AuditOperatorAccount {
   }
 
   try {
-    $account = $accountJson | ConvertFrom-Json -ErrorAction Stop
+    $account = $accountJson | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
   }
   catch {
     throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account metadata.')
@@ -141,7 +141,6 @@ function Get-AuditScopedAccessToken {
   }
   $SubscriptionId = $parsedSubscriptionId.ToString()
   $TenantId = $parsedTenantId.ToString()
-  $subscriptionScopedResource = $ResourceUrl -eq 'https://management.azure.com'
   if ($ResourceUrl -notin @(
       'https://management.azure.com',
       'https://graph.microsoft.com',
@@ -151,19 +150,12 @@ function Get-AuditScopedAccessToken {
     throw (New-AuditOperatorContextException -Message 'The requested Azure CLI token audience is not supported by this hook.')
   }
 
-  # Azure CLI resolves the subscription-to-tenant mapping here. Its token command
-  # accepts exactly one of --subscription or --tenant, never both.
+  # Azure CLI resolves the account and tenant from this explicit subscription.
   $null = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
 
   try {
     Ensure-Command -Name 'az'
-    $tokenArguments = @('account', 'get-access-token')
-    if ($subscriptionScopedResource) {
-      $tokenArguments += @('--subscription', $SubscriptionId)
-    }
-    else {
-      $tokenArguments += @('--tenant', $TenantId)
-    }
+    $tokenArguments = @('account', 'get-access-token', '--subscription', $SubscriptionId)
     $tokenArguments += @('--resource', $ResourceUrl, '--only-show-errors', '--output', 'json')
     $tokenJson = & az @tokenArguments 2>$null
   }
@@ -176,7 +168,7 @@ function Get-AuditScopedAccessToken {
   }
 
   try {
-    $tokenResponse = $tokenJson | ConvertFrom-Json -ErrorAction Stop
+    $tokenResponse = $tokenJson | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
   }
   catch {
     throw (New-AuditOperatorContextException -Message "Azure CLI returned malformed token metadata for '$ResourceUrl'.")
@@ -189,13 +181,9 @@ function Get-AuditScopedAccessToken {
   $accessTokenProperty = $tokenResponse.PSObject.Properties['accessToken']
   $subscriptionProperty = $tokenResponse.PSObject.Properties['subscription']
   $tenantProperty = $tokenResponse.PSObject.Properties['tenant']
-  $invalidSubscriptionMetadata = if ($subscriptionScopedResource) {
-    $null -eq $subscriptionProperty -or $subscriptionProperty.Value -isnot [string] -or
-      [string]$subscriptionProperty.Value -ine $SubscriptionId
-  }
-  else {
-    $null -eq $subscriptionProperty -or $null -ne $subscriptionProperty.Value
-  }
+  $invalidSubscriptionMetadata = $null -eq $subscriptionProperty -or
+    $subscriptionProperty.Value -isnot [string] -or
+    [string]$subscriptionProperty.Value -ine $SubscriptionId
   if ($null -eq $accessTokenProperty -or $null -eq $tenantProperty -or
       $accessTokenProperty.Value -isnot [string] -or $tenantProperty.Value -isnot [string] -or
       [string]::IsNullOrWhiteSpace($accessTokenProperty.Value) -or

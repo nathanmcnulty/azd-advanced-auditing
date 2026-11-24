@@ -15,7 +15,7 @@
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "59b04cca137e6a7e63c8eea3e9758b3a363145b72aada0b79ae06bb344a301bb"
+          "sha256": "ac1edb816224034614cc3212a0a556ee9ed9e6462ebbd21a17e55aec6cc2d48b"
         }
       ],
       "feature": "baseline-deployment",
