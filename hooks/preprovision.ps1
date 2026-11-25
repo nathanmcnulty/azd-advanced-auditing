@@ -11,18 +11,23 @@ Write-Section -Message 'Preparing azd environment values'
 Ensure-Command -Name 'az'
 Ensure-Command -Name 'azd'
 
-$names = Get-AuditTemplateNames
-Set-AzdEnvironmentValue -Name 'AZURE_RESOURCE_GROUP' -Value $names.ResourceGroupName
-Set-AzdEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.AutomationAccountName
+$environmentName = Get-AuditHookEnvironmentName
+$azdValues = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $environmentName
+$context = New-AuditHookContext -EnvironmentName $environmentName -AzdValues $azdValues -TargetNames @(
+  'AUTOMATION_JOB_SCHEDULE_ID', 'AUTOMATION_OWNED_ACCOUNT_ID', 'AUTOMATION_OWNED_PRINCIPAL_ID',
+  'AUTOMATION_OWNED_JOB_SCHEDULE_ID', 'AUTOMATION_ADOPT_ACCOUNT_ID', 'AUTOMATION_ADOPT_PRINCIPAL_ID',
+  'AUTOMATION_ADOPT_JOB_SCHEDULE_ID'
+)
+$names = Get-AuditTemplateNames -AzdValues $azdValues
+Set-AuditHookEnvironmentValue -Name 'AZURE_RESOURCE_GROUP' -Value $names.ResourceGroupName -Context $context
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.AutomationAccountName -Context $context
 
 $deploymentTimestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-Set-AzdEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp
+Set-AuditHookEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp -Context $context
 
-$subscriptionId = [System.Environment]::GetEnvironmentVariable('AZURE_SUBSCRIPTION_ID')
+$subscriptionId = $context.Operator.SubscriptionId
 $resourceGroupName = $names.ResourceGroupName
 $automationAccountName = $names.AutomationAccountName
-$azdValues = Get-AzdEnvironmentValues
-if ([string]::IsNullOrWhiteSpace($subscriptionId)) { throw 'AZURE_SUBSCRIPTION_ID is required.' }
 $expectedAccountId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $subscriptionId, $resourceGroupName, $automationAccountName)
 
 Write-Section -Message 'Managing Automation jobSchedule state'
@@ -63,4 +68,4 @@ $ownership = Resolve-AuditJobScheduleOwnership -ExpectedAccountId $expectedAccou
 if (-not [string]::IsNullOrWhiteSpace($ownership.OwnedJobScheduleId)) {
   Write-Host "Existing template jobSchedule '$($ownership.OwnedJobScheduleId)' verified. Its linkage remains intact while ARM redeploys."
 }
-Set-AzdEnvironmentValue -Name 'AUTOMATION_JOB_SCHEDULE_ID' -Value $ownership.JobScheduleId
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_JOB_SCHEDULE_ID' -Value $ownership.JobScheduleId -Context $context

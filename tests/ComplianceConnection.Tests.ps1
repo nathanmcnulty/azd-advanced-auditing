@@ -25,6 +25,9 @@ BeforeAll {
       $calls = [Collections.Generic.List[object]]::new()
       $retentionCalls = [Collections.Generic.List[string]]::new()
       function Get-AzCliUserPrincipalName { 'operator@example.test' }
+      $script:AuditHookContext = 'offline-fixture'
+      function Assert-AuditHookContext { param($Context) if ($Context -ne 'offline-fixture') { throw 'Expected fixture context.' } }
+      function Assert-AuditNativeContext { param($Service) if ($Service -ne 'Compliance') { throw 'Expected Compliance verification.' } }
       function Get-AzCliAccessToken {
         param($ResourceUrl)
         if ($ResourceUrl -ne 'https://ps.compliance.protection.outlook.com') { throw 'Unexpected token audience.' }
@@ -32,7 +35,7 @@ BeforeAll {
         'offline-token'
       }
       function Connect-IPPSSession {
-        param($AccessToken, $UserPrincipalName, $Organization, [bool]$ShowBanner)
+        param($AccessToken, $UserPrincipalName, $Organization, [bool]$ShowBanner, $CommandName, $ErrorAction)
         $calls.Add(@{} + $PSBoundParameters)
         if (($UserPrincipalName -and $FailUpn) -or ($Organization -and $FailOrganization)) { throw 'Offline connection failure.' }
         [pscustomobject]@{ UnexpectedOutput = 'must not escape the connection helper' }
@@ -57,6 +60,7 @@ Describe 'Compliance bootstrap connection result and retention decision' {
     $result.Connected | Should -BeTrue
     $result.ConnectionCalls.Count | Should -Be 1
     $result.ConnectionCalls[0].UserPrincipalName | Should -Be 'operator@example.test'
+    $result.ConnectionCalls[0].CommandName | Should -Be @('Get-UnifiedAuditLogRetentionPolicy', 'New-UnifiedAuditLogRetentionPolicy')
     $result.ConnectionCalls[0].ContainsKey('Organization') | Should -BeFalse
     $result.RetentionCalls | Should -Be @('All Records - 1 Year')
     $result.DegradedCount | Should -Be 0

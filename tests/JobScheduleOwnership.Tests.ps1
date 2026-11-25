@@ -68,6 +68,11 @@ Describe 'Automation jobSchedule ownership' {
 }
 
 Describe 'Exchange bootstrap fallback' {
+  BeforeEach {
+    $script:AuditHookContext = 'offline-fixture'
+    function Assert-AuditHookContext { param($Context) if ($Context -ne 'offline-fixture') { throw 'Expected fixture context.' } }
+    function Assert-AuditNativeContext { param($Service) if ($Service -ne 'Exchange') { throw 'Expected Exchange verification.' } }
+  }
   BeforeAll {
     . (Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1')
     $path = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/postprovision.ps1'
@@ -124,20 +129,24 @@ Describe 'Exchange bootstrap fallback' {
 Describe 'Preprovision preserves existing schedule linkage' {
   BeforeAll {
     $script:hookPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/preprovision.ps1'
-    $script:accountId = '/subscriptions/sub-1/resourceGroups/rg-offline/providers/Microsoft.Automation/automationAccounts/aaauditoffline'
+    $script:subscriptionId = '11111111-1111-1111-1111-111111111111'
+    $script:tenantId = '22222222-2222-2222-2222-222222222222'
+    $script:accountId = "/subscriptions/$($script:subscriptionId)/resourceGroups/rg-offline/providers/Microsoft.Automation/automationAccounts/aaauditoffline"
     $script:principalId = '11111111-1111-1111-1111-111111111111'
     $script:scheduleId = '22222222-2222-2222-2222-222222222222'
   }
 
   It 'leaves the prior linkage and lock intact before a failed ARM redeployment' {
     & {
-      $names = @('AZURE_ENV_NAME','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
+      $names = @('AZURE_ENV_NAME','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
       $saved = @{}
       foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
       try {
         [Environment]::SetEnvironmentVariable('AZURE_ENV_NAME', 'offline')
-        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', 'sub-1')
+        [Environment]::SetEnvironmentVariable('AZURE_TENANT_ID', $script:tenantId)
+        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', $script:subscriptionId)
         [Environment]::SetEnvironmentVariable('AZURE_RESOURCE_GROUP', 'rg-offline')
+        [Environment]::SetEnvironmentVariable('AUTOMATION_ACCOUNT_NAME', $null)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_ACCOUNT_ID', $script:accountId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_PRINCIPAL_ID', $script:principalId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_JOB_SCHEDULE_ID', $script:scheduleId)
@@ -145,20 +154,41 @@ Describe 'Preprovision preserves existing schedule linkage' {
         $global:testAccountId = $script:accountId
         $global:testPrincipalId = $script:principalId
         $global:testScheduleId = $script:scheduleId
+        $global:testSubscriptionId = $script:subscriptionId
+        $global:testTenantId = $script:tenantId
+        $global:testAzdValues = [ordered]@{ AZURE_ENV_NAME='offline'; AZURE_SUBSCRIPTION_ID=$script:subscriptionId; AZURE_TENANT_ID=$script:tenantId; AZURE_RESOURCE_GROUP='rg-offline' }
         function azd {
-          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') { $global:LASTEXITCODE = 0; return 'AZURE_ENV_NAME=offline' }
-          if ($args[0] -eq 'env' -and $args[1] -eq 'set') { $global:LASTEXITCODE = 0; return }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            return @($global:testAzdValues.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value })
+          }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'set') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            $global:testAzdValues[$args[2]] = $args[3]
+            return
+          }
           throw "Unexpected azd command: $($args -join ' ')"
         }
         function az {
           $command = $args -join ' '
           $global:testAzureCalls.Add($command)
           $global:LASTEXITCODE = 0
+          if ($args[0] -eq 'account' -and $args[1] -eq 'show') { return ('{{"id":"{0}","tenantId":"{1}","user":{{"name":"offline@example.invalid"}}}}' -f $global:testSubscriptionId,$global:testTenantId) }
+          if ($args[0] -eq 'account' -and $args[1] -eq 'get-access-token') { return ('{{"accessToken":"offline-token","subscription":"{0}","tenant":"{1}"}}' -f $global:testSubscriptionId,$global:testTenantId) }
           if ($command -like 'group exists *') { return 'true' }
           if ($command -like 'automation account list *') { return '[{"name":"aaauditoffline"}]' }
           if ($command -like 'automation account show *') { return ('{{"id":"{0}","identity":{{"principalId":"{1}"}}}}' -f $global:testAccountId,$global:testPrincipalId) }
           if ($command -like 'rest --method GET *') { return ('{{"value":[{{"name":"{0}","properties":{{"jobScheduleId":"{0}","schedule":{{"name":"advanced-auditing-daily"}},"runbook":{{"name":"Enable-AdvancedAuditing"}}}}}}]}}' -f $global:testScheduleId) }
           throw "Unexpected Azure command: $command"
+        }
+        function Invoke-WebRequest {
+          [CmdletBinding()]
+          param([string]$Method, [string]$Uri, [hashtable]$Headers, [int]$MaximumRedirection, [int]$TimeoutSec)
+          [pscustomobject]@{ StatusCode = 200; Content = ('{{"id":"/subscriptions/{0}","subscriptionId":"{0}","tenantId":"{1}","state":"Enabled"}}' -f $global:testSubscriptionId,$global:testTenantId) }
         }
         & $script:hookPath
         { throw 'simulated ARM failure' } | Should -Throw '*simulated ARM failure*'
@@ -167,7 +197,7 @@ Describe 'Preprovision preserves existing schedule linkage' {
       }
       finally {
         foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
-        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId,testSubscriptionId,testTenantId,testAzdValues -Scope Global -ErrorAction SilentlyContinue
         $global:LASTEXITCODE = 0
       }
     }
@@ -175,13 +205,15 @@ Describe 'Preprovision preserves existing schedule linkage' {
 
   It 'rejects a mismatched receipt before any Azure mutation' {
     & {
-      $names = @('AZURE_ENV_NAME','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
+      $names = @('AZURE_ENV_NAME','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AUTOMATION_ACCOUNT_NAME','AUTOMATION_JOB_SCHEDULE_ID','DEPLOYMENT_TIMESTAMP','AUTOMATION_OWNED_ACCOUNT_ID','AUTOMATION_OWNED_PRINCIPAL_ID','AUTOMATION_OWNED_JOB_SCHEDULE_ID')
       $saved = @{}
       foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
       try {
         [Environment]::SetEnvironmentVariable('AZURE_ENV_NAME', 'offline')
-        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', 'sub-1')
+        [Environment]::SetEnvironmentVariable('AZURE_TENANT_ID', $script:tenantId)
+        [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', $script:subscriptionId)
         [Environment]::SetEnvironmentVariable('AZURE_RESOURCE_GROUP', 'rg-offline')
+        [Environment]::SetEnvironmentVariable('AUTOMATION_ACCOUNT_NAME', $null)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_ACCOUNT_ID', $script:accountId)
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_PRINCIPAL_ID', '99999999-9999-9999-9999-999999999999')
         [Environment]::SetEnvironmentVariable('AUTOMATION_OWNED_JOB_SCHEDULE_ID', $script:scheduleId)
@@ -189,27 +221,48 @@ Describe 'Preprovision preserves existing schedule linkage' {
         $global:testAccountId = $script:accountId
         $global:testPrincipalId = $script:principalId
         $global:testScheduleId = $script:scheduleId
+        $global:testSubscriptionId = $script:subscriptionId
+        $global:testTenantId = $script:tenantId
+        $global:testAzdValues = [ordered]@{ AZURE_ENV_NAME='offline'; AZURE_SUBSCRIPTION_ID=$script:subscriptionId; AZURE_TENANT_ID=$script:tenantId; AZURE_RESOURCE_GROUP='rg-offline' }
         function azd {
-          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') { $global:LASTEXITCODE = 0; return 'AZURE_ENV_NAME=offline' }
-          if ($args[0] -eq 'env' -and $args[1] -eq 'set') { $global:LASTEXITCODE = 0; return }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'get-values') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            return @($global:testAzdValues.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value })
+          }
+          if ($args[0] -eq 'env' -and $args[1] -eq 'set') {
+            $environmentIndex = [Array]::IndexOf([string[]]$args, '--environment')
+            if ($environmentIndex -lt 0 -or $args[$environmentIndex + 1] -ne 'offline') { throw 'Expected explicit azd environment selection.' }
+            $global:LASTEXITCODE = 0
+            $global:testAzdValues[$args[2]] = $args[3]
+            return
+          }
           throw "Unexpected azd command: $($args -join ' ')"
         }
         function az {
           $command = $args -join ' '
           $global:testAzureCalls.Add($command)
           $global:LASTEXITCODE = 0
+          if ($args[0] -eq 'account' -and $args[1] -eq 'show') { return ('{{"id":"{0}","tenantId":"{1}","user":{{"name":"offline@example.invalid"}}}}' -f $global:testSubscriptionId,$global:testTenantId) }
+          if ($args[0] -eq 'account' -and $args[1] -eq 'get-access-token') { return ('{{"accessToken":"offline-token","subscription":"{0}","tenant":"{1}"}}' -f $global:testSubscriptionId,$global:testTenantId) }
           if ($command -like 'group exists *') { return 'true' }
           if ($command -like 'automation account list *') { return '[{"name":"aaauditoffline"}]' }
           if ($command -like 'automation account show *') { return ('{{"id":"{0}","identity":{{"principalId":"{1}"}}}}' -f $global:testAccountId,$global:testPrincipalId) }
           if ($command -like 'rest --method GET *') { return ('{{"value":[{{"name":"{0}","properties":{{"jobScheduleId":"{0}","schedule":{{"name":"advanced-auditing-daily"}},"runbook":{{"name":"Enable-AdvancedAuditing"}}}}}}]}}' -f $global:testScheduleId) }
           throw "Unexpected Azure command: $command"
         }
+        function Invoke-WebRequest {
+          [CmdletBinding()]
+          param([string]$Method, [string]$Uri, [hashtable]$Headers, [int]$MaximumRedirection, [int]$TimeoutSec)
+          [pscustomobject]@{ StatusCode = 200; Content = ('{{"id":"/subscriptions/{0}","subscriptionId":"{0}","tenantId":"{1}","state":"Enabled"}}' -f $global:testSubscriptionId,$global:testTenantId) }
+        }
         { & $script:hookPath } | Should -Throw '*receipt does not match*'
         @($global:testAzureCalls | Where-Object { $_ -match 'DELETE|lock delete|lock create' }).Count | Should -Be 0
       }
       finally {
         foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
-        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable testAzureCalls,testAccountId,testPrincipalId,testScheduleId,testSubscriptionId,testTenantId,testAzdValues -Scope Global -ErrorAction SilentlyContinue
         $global:LASTEXITCODE = 0
       }
     }
