@@ -296,6 +296,11 @@ function Assert-AuditOperatorSubscriptionEnabled {
     throw (New-AuditOperatorContextException -Message 'Azure subscription metadata does not match the selected target or is not Enabled.')
   }
 
+  $after = Get-AuditOperatorAccount -SubscriptionId $subscriptionId -TenantId $tenantId
+  if ((Get-AuditOperatorIdentity -Account $after) -ine $tokenContext.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure CLI operator changed during subscription verification.')
+  }
+
   return [pscustomobject]@{
     SubscriptionId = $subscriptionId
     TenantId = $tenantId
@@ -379,6 +384,9 @@ function Get-AzdEnvironmentValues {
     if ($line -match '^(?:export\s+)?(?<name>[A-Za-z0-9_]+)=(?<value>.*)$') {
       $name = $matches['name'].ToUpperInvariant()
       $value = $matches['value'].Trim()
+      if ($RequireSuccess -and $values.ContainsKey($name)) {
+        throw (New-AuditOperatorContextException -Message 'The selected azd environment returned duplicate keys.')
+      }
 
       if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
         $value = $value.Substring(1, $value.Length - 2)
@@ -442,6 +450,116 @@ function Get-AuditPinnedAzdEnvironmentValues {
   }
 
   return $azdValues
+}
+
+function Get-AuditHookTargetValues {
+  param([hashtable]$AzdValues, [string[]]$Names)
+
+  $targetValues = @{}
+  foreach ($name in $Names) {
+    $stored = [string]$azdValues[$name]
+    $process = [Environment]::GetEnvironmentVariable($name)
+    if ($stored -and $process -and $stored -ine $process) {
+      throw (New-AuditOperatorContextException -Message "The process and selected azd target '$name' disagree.")
+    }
+    $targetValues[$name] = Get-ValueFromEnvironment -Name $name -AzdValues $azdValues
+  }
+  return $targetValues
+}
+
+function New-AuditHookContext {
+  param([string]$EnvironmentName, [hashtable]$AzdValues, [string[]]$TargetNames)
+
+  $targetNames = @('AZURE_RESOURCE_GROUP', 'AUTOMATION_ACCOUNT_NAME') + $TargetNames
+  $values = Get-AuditHookTargetValues -AzdValues $AzdValues -Names $targetNames
+  [pscustomobject]@{
+    EnvironmentName = $EnvironmentName
+    Operator = Assert-AuditOperatorSubscriptionEnabled -AzdValues $AzdValues
+    Values = $values
+  }
+}
+
+function Assert-AuditHookContext {
+  param($Context)
+
+  if ($null -eq $Context) {
+    throw (New-AuditOperatorContextException -Message 'Writes require a pinned Auditing hook context.')
+  }
+  $azdValues = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $Context.EnvironmentName
+  $operator = Assert-AuditOperatorSubscriptionEnabled -AzdValues $azdValues
+  if ($operator.SubscriptionId -ine $Context.Operator.SubscriptionId -or
+      $operator.TenantId -ine $Context.Operator.TenantId -or
+      $operator.OperatorIdentity -ine $Context.Operator.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure target or CLI operator changed before a write.')
+  }
+  if ($Context.Values.ContainsKey('AUTOMATION_PRINCIPAL_ID')) {
+    $group = $Context.Values['AZURE_RESOURCE_GROUP']
+    $name = $Context.Values['AUTOMATION_ACCOUNT_NAME']
+    $expectedId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $operator.SubscriptionId, $group, $name
+    try {
+      $raw = & az automation account show --subscription $operator.SubscriptionId --resource-group $group --name $name --only-show-errors -o json 2>$null
+      if ($LASTEXITCODE -ne 0) { throw 'Account read failed.' }
+      $account = $raw | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+      if ($account.id -isnot [string] -or $account.id -ine $expectedId -or
+          $account.identity.principalId -isnot [string] -or $account.identity.principalId -ine $Context.Values['AUTOMATION_PRINCIPAL_ID']) {
+        throw 'Account or principal differs from the ownership target.'
+      }
+    } catch {
+      throw (New-AuditOperatorContextException -Message 'The provisioned Automation account or managed identity could not be reverified before a write.')
+    }
+    $actor = Get-AuditOperatorAccount -SubscriptionId $operator.SubscriptionId -TenantId $operator.TenantId
+    if ((Get-AuditOperatorIdentity -Account $actor) -ine $operator.OperatorIdentity) {
+      throw (New-AuditOperatorContextException -Message 'The selected Azure CLI operator changed during Automation ownership verification.')
+    }
+  }
+  $selectors = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $Context.EnvironmentName
+  $current = Get-AuditHookTargetValues -AzdValues $selectors -Names @($Context.Values.Keys)
+  foreach ($name in $current.Keys) {
+    if ($current[$name] -ine $Context.Values[$name]) {
+      throw (New-AuditOperatorContextException -Message "The selected azd target '$name' changed before a write.")
+    }
+  }
+  if ((Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $selectors) -ine $operator.SubscriptionId -or
+      (Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $selectors) -ine $operator.TenantId) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure selectors changed during write verification.')
+  }
+}
+
+function Set-AuditHookEnvironmentValue {
+  param([string]$Name, [string]$Value, $Context)
+
+  Assert-AuditHookContext -Context $Context
+  Set-AzdEnvironmentValue -Name $Name -Value $Value -EnvironmentName $Context.EnvironmentName
+  if ($Context.Values.ContainsKey($Name)) { $Context.Values[$Name] = $Value }
+}
+
+function Assert-AuditAutomationWrite {
+  param($Context, [string]$SubscriptionId, [string]$ResourceGroupName, [string]$AutomationAccountName, [string]$RunbookName)
+
+  Assert-AuditHookContext -Context $Context
+  if ($SubscriptionId -ine $Context.Operator.SubscriptionId -or
+      $ResourceGroupName -ine $Context.Values['AZURE_RESOURCE_GROUP'] -or
+      $AutomationAccountName -ine $Context.Values['AUTOMATION_ACCOUNT_NAME']) {
+    throw (New-AuditOperatorContextException -Message 'The requested Automation write does not match the pinned hook target.')
+  }
+  if ($RunbookName) {
+    $allowedRunbooks = @('Enable-AdvancedAuditing', $Context.Values['VALIDATE_CONNECTION_RUNBOOK_NAME'], $Context.Values['VALIDATE_CONFIGURATION_RUNBOOK_NAME'])
+    if ($RunbookName -notin $allowedRunbooks) {
+      throw (New-AuditOperatorContextException -Message 'The requested runbook does not match a pinned hook target.')
+    }
+  }
+}
+
+function Get-AuditHookArmToken {
+  param($Context, [string]$SubscriptionId, [string]$TenantId)
+
+  $token = Get-AuditScopedAccessToken -SubscriptionId $SubscriptionId -TenantId $TenantId `
+    -ResourceUrl 'https://management.azure.com' -IncludeOperatorIdentity
+  if ($null -eq $Context -or $SubscriptionId -ine $Context.Operator.SubscriptionId -or $TenantId -ine $Context.Operator.TenantId -or
+      $token.OperatorIdentity -ine $Context.Operator.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The ARM token does not match the pinned hook operator and tenant.')
+  }
+  return $token.AccessToken
 }
 
 function Get-ValueFromEnvironment {
@@ -547,10 +665,15 @@ function Set-AutomationVariableValue {
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$VariableName,
-    [Parameter(Mandatory = $true)][string]$Value
+    [Parameter(Mandatory = $true)][string]$Value,
+    $HookContext
   )
 
-  $uri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/variables/{3}?api-version=2023-11-01' -f $SubscriptionId, $ResourceGroupName, $AutomationAccountName, $VariableName)
+  $encodedVariableName = [uri]::EscapeDataString($VariableName)
+  if ($encodedVariableName -cin @('.', '..')) {
+    throw (New-AuditOperatorContextException -Message 'The Automation variable name is invalid.')
+  }
+  $uri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/variables/{3}?api-version=2023-11-01' -f $SubscriptionId, $ResourceGroupName, $AutomationAccountName, $encodedVariableName)
   $payload = @{
     properties = @{
       description = "Updated by postprovision for $VariableName"
@@ -559,15 +682,17 @@ function Set-AutomationVariableValue {
     }
   } | ConvertTo-Json -Depth 5 -Compress
 
-  $armToken = Get-AuditScopedAccessToken `
-    -SubscriptionId $SubscriptionId `
-    -TenantId $TenantId `
-    -ResourceUrl 'https://management.azure.com'
-
+  $armToken = Get-AuditHookArmToken $HookContext $SubscriptionId $TenantId
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName
+  if ($VariableName -ine $HookContext.Values['EXCHANGE_ORGANIZATION_VARIABLE_NAME'] -and
+      ($VariableName -ine 'AuditRetentionSetupState' -or $HookContext.Values['OPERATIONAL_ALERTS_ENABLED'] -ine 'true')) {
+    throw (New-AuditOperatorContextException -Message 'The requested variable does not match a pinned hook target.')
+  }
   Invoke-RestMethod `
     -Method PUT `
     -Uri $uri `
     -Headers @{ Authorization = "Bearer $($armToken.Trim())" } `
+    -MaximumRedirection 0 `
     -ContentType 'application/json' `
     -Body $payload | Out-Null
 }
@@ -578,7 +703,8 @@ function Publish-AutomationRunbookContent {
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$RunbookName,
-    [Parameter(Mandatory = $true)][string]$FilePath
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    $HookContext
   )
 
   if (-not (Test-Path -Path $FilePath)) {
@@ -596,6 +722,7 @@ function Publish-AutomationRunbookContent {
     throw "Could not inspect Automation runbook '$RunbookName' before publishing."
   }
 
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName $RunbookName
   & az automation runbook replace-content `
     --subscription $SubscriptionId `
     --resource-group $ResourceGroupName `
@@ -608,6 +735,7 @@ function Publish-AutomationRunbookContent {
     throw "Could not replace content for Automation runbook '$RunbookName'."
   }
 
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName $RunbookName
   & az automation runbook publish `
     --subscription $SubscriptionId `
     --resource-group $ResourceGroupName `
@@ -715,7 +843,8 @@ function Start-AutomationRunbookAndWait {
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$RunbookName,
-    [Parameter(Mandatory = $false)][hashtable]$Parameters
+    [Parameter(Mandatory = $false)][hashtable]$Parameters,
+    $HookContext
   )
 
   $commandArgs = @(
@@ -735,7 +864,9 @@ function Start-AutomationRunbookAndWait {
     }
   }
 
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName $RunbookName
   $job = & az @commandArgs | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw 'Could not start the selected Automation runbook.' }
 
   $jobId = ''
   if ($job.jobId) {

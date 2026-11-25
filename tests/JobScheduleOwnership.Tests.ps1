@@ -68,6 +68,11 @@ Describe 'Automation jobSchedule ownership' {
 }
 
 Describe 'Exchange bootstrap fallback' {
+  BeforeEach {
+    $script:AuditHookContext = 'offline-fixture'
+    function Assert-AuditHookContext { param($Context) if ($Context -ne 'offline-fixture') { throw 'Expected fixture context.' } }
+    function Assert-AuditNativeContext { param($Service) if ($Service -ne 'Exchange') { throw 'Expected Exchange verification.' } }
+  }
   BeforeAll {
     . (Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/Common.ps1')
     $path = Join-Path (Split-Path $PSScriptRoot -Parent) 'hooks/postprovision.ps1'

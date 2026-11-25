@@ -13,15 +13,19 @@ Ensure-Command -Name 'azd'
 
 $environmentName = Get-AuditHookEnvironmentName
 $azdValues = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $environmentName
-$target = Assert-AuditOperatorSubscriptionEnabled -AzdValues $azdValues
+$context = New-AuditHookContext -EnvironmentName $environmentName -AzdValues $azdValues -TargetNames @(
+  'AUTOMATION_JOB_SCHEDULE_ID', 'AUTOMATION_OWNED_ACCOUNT_ID', 'AUTOMATION_OWNED_PRINCIPAL_ID',
+  'AUTOMATION_OWNED_JOB_SCHEDULE_ID', 'AUTOMATION_ADOPT_ACCOUNT_ID', 'AUTOMATION_ADOPT_PRINCIPAL_ID',
+  'AUTOMATION_ADOPT_JOB_SCHEDULE_ID'
+)
 $names = Get-AuditTemplateNames -AzdValues $azdValues
-Set-AzdEnvironmentValue -Name 'AZURE_RESOURCE_GROUP' -Value $names.ResourceGroupName -EnvironmentName $environmentName
-Set-AzdEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.AutomationAccountName -EnvironmentName $environmentName
+Set-AuditHookEnvironmentValue -Name 'AZURE_RESOURCE_GROUP' -Value $names.ResourceGroupName -Context $context
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_ACCOUNT_NAME' -Value $names.AutomationAccountName -Context $context
 
 $deploymentTimestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-Set-AzdEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp -EnvironmentName $environmentName
+Set-AuditHookEnvironmentValue -Name 'DEPLOYMENT_TIMESTAMP' -Value $deploymentTimestamp -Context $context
 
-$subscriptionId = $target.SubscriptionId
+$subscriptionId = $context.Operator.SubscriptionId
 $resourceGroupName = $names.ResourceGroupName
 $automationAccountName = $names.AutomationAccountName
 $expectedAccountId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $subscriptionId, $resourceGroupName, $automationAccountName)
@@ -64,13 +68,4 @@ $ownership = Resolve-AuditJobScheduleOwnership -ExpectedAccountId $expectedAccou
 if (-not [string]::IsNullOrWhiteSpace($ownership.OwnedJobScheduleId)) {
   Write-Host "Existing template jobSchedule '$($ownership.OwnedJobScheduleId)' verified. Its linkage remains intact while ARM redeploys."
 }
-$finalAzdValues = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $environmentName -RequireResourceValues
-$finalTarget = Assert-AuditOperatorSubscriptionEnabled -AzdValues $finalAzdValues
-if ($finalTarget.SubscriptionId -ine $target.SubscriptionId -or
-    $finalTarget.TenantId -ine $target.TenantId -or
-    $finalTarget.OperatorIdentity -ine $target.OperatorIdentity -or
-    [string]$finalAzdValues['AZURE_RESOURCE_GROUP'] -ine $resourceGroupName -or
-    [string]$finalAzdValues['AUTOMATION_ACCOUNT_NAME'] -ine $automationAccountName) {
-  throw (New-AuditOperatorContextException -Message 'The selected azd environment, Azure target, CLI operator, or Automation resource changed before final schedule persistence.')
-}
-Set-AzdEnvironmentValue -Name 'AUTOMATION_JOB_SCHEDULE_ID' -Value $ownership.JobScheduleId -EnvironmentName $environmentName
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_JOB_SCHEDULE_ID' -Value $ownership.JobScheduleId -Context $context

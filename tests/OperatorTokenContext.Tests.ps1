@@ -232,6 +232,7 @@ Describe 'Explicit operator selectors and scoped token metadata' {
 
 Describe 'Actual postprovision and Common token consumers' {
   BeforeEach {
+    $script:AuditHookContext = @{Operator = @{OperatorIdentity = 'operator@example.test'}}
     $script:subscriptionId = '11111111-1111-1111-1111-111111111111'
     $script:tenantId = '22222222-2222-2222-2222-222222222222'
     $global:OperatorTokenFixture = [pscustomobject]@{
@@ -274,7 +275,7 @@ Describe 'Actual postprovision and Common token consumers' {
       $output[0].value[0].id | Should -BeExactly 'fixture'
       $global:OperatorTokenFixture.HttpCalls.Count | Should -Be 1
       $global:OperatorTokenFixture.HttpCalls[0].Authorization | Should -BeExactly 'Bearer offline-test-token'
-      $tokenArgs = @($global:OperatorTokenFixture.Calls[-1].Args)
+      $tokenArgs = @(@($global:OperatorTokenFixture.Calls | Where-Object { $_.Args[1] -eq 'get-access-token' })[-1].Args)
       $tokenArgs | Should -Contain '--subscription'
       $tokenArgs | Should -Contain $script:subscriptionId
       $tokenArgs | Should -Not -Contain '--tenant'
@@ -378,8 +379,8 @@ Describe 'Actual postprovision and Common token consumers' {
 
   It 'binds the token context before the first postprovision ownership receipt write' {
     $source = Get-Content "$script:repoRoot/hooks/postprovision.ps1" -Raw
-    $targetRead = $source.IndexOf("-ResourceUrl 'https://management.azure.com' | Out-Null")
-    $firstReceiptWrite = $source.IndexOf("Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_ACCOUNT_ID'")
+    $targetRead = $source.IndexOf('$script:AuditHookContext = New-AuditHookContext')
+    $firstReceiptWrite = $source.IndexOf("Set-AuditHookEnvironmentValue -Name 'AUTOMATION_OWNED_ACCOUNT_ID'")
     $targetRead | Should -BeGreaterThan -1
     $firstReceiptWrite | Should -BeGreaterThan $targetRead
 

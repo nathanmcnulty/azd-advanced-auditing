@@ -15,11 +15,17 @@ function Invoke-GraphRest {
     [Parameter(Mandatory = $false)][string]$Body
   )
 
+  $endpoint = [uri]$Uri
+  if ($endpoint.Scheme -cne 'https' -or $endpoint.Host -cne 'graph.microsoft.com' -or
+      $endpoint.Port -ne 443 -or $endpoint.UserInfo -or $endpoint.Fragment -or $endpoint.AbsolutePath -notmatch '^/v1\.0/') {
+    throw (New-AuditOperatorContextException -Message 'Graph bootstrap requires a public-cloud Graph v1.0 endpoint.')
+  }
   $graphToken = Get-AzCliAccessToken -ResourceUrl 'https://graph.microsoft.com'
   $requestParams = @{
     Method  = $Method
     Uri     = $Uri
     Headers = @{ Authorization = "Bearer $graphToken" }
+    MaximumRedirection = 0
   }
 
   if (-not [string]::IsNullOrWhiteSpace($Body)) {
@@ -27,6 +33,7 @@ function Invoke-GraphRest {
     $requestParams['Body'] = $Body
   }
 
+  if ($Method -ine 'GET') { Assert-AuditHookContext -Context $script:AuditHookContext }
   $response = Invoke-RestMethod @requestParams
   if ($null -eq $response) {
     return $null
@@ -38,17 +45,61 @@ function Invoke-GraphRest {
 function Get-AzCliAccessToken {
   param([Parameter(Mandatory = $true)][string]$ResourceUrl)
 
-  return Get-AuditScopedAccessToken `
+  $token = Get-AuditScopedAccessToken `
     -ResourceUrl $ResourceUrl `
     -SubscriptionId $script:AuditOperatorSubscriptionId `
-    -TenantId $script:AuditOperatorTenantId
+    -TenantId $script:AuditOperatorTenantId `
+    -IncludeOperatorIdentity
+  if ($token.OperatorIdentity -ine $script:AuditHookContext.Operator.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The operator changed while acquiring a token for the Auditing hook.')
+  }
+  return $token.AccessToken
 }
 
 function Get-AzCliUserPrincipalName {
   $account = Get-AuditOperatorAccount `
     -SubscriptionId $script:AuditOperatorSubscriptionId `
     -TenantId $script:AuditOperatorTenantId
+  if ((Get-AuditOperatorIdentity -Account $account) -ine $script:AuditHookContext.Operator.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The operator changed while selecting the native Auditing session.')
+  }
   return [string]$account.user.name
+}
+
+function Assert-AuditNativeContext {
+  param([ValidateSet('Exchange', 'Compliance')][string]$Service, [string]$CommandName)
+
+  Assert-AuditHookContext -Context $script:AuditHookContext
+  $operator = Get-AzCliUserPrincipalName
+  try {
+    $connections = @(Get-ConnectionInformation -ErrorAction Stop)
+    if (@($connections | Where-Object { $_.IsEopSession -isnot [bool] }).Count) { throw 'Unknown session kind.' }
+    $compliance = $Service -eq 'Compliance'
+    $selected = @($connections | Where-Object { $_.IsEopSession -eq $compliance })
+    if ($selected.Count -ne 1) { throw 'Ambiguous or missing native session.' }
+    $connection = $selected[0]
+    if ($connection.TenantID -isnot [string] -or $connection.UserPrincipalName -isnot [string] -or
+        $connection.TenantID -ine $script:AuditOperatorTenantId -or $connection.UserPrincipalName -ine $operator -or
+        $connection.State -cne 'Connected' -or $connection.TokenStatus -cne 'Active' -or
+        $connection.ModulePrefix -or $connection.DelegatedOrganization -or $connection.CertificateAuthentication -isnot [bool] -or
+        $connection.CertificateAuthentication) { throw 'Native identity or state differs from the pinned context.' }
+    $endpoint = [uri]$connection.ConnectionUri
+    $validHost = if ($compliance) {
+      $endpoint.Host -eq 'ps.compliance.protection.outlook.com' -or
+        $endpoint.Host.EndsWith('.ps.compliance.protection.outlook.com', [StringComparison]::OrdinalIgnoreCase)
+    } else { $endpoint.Host -eq 'outlook.office365.com' }
+    if ($endpoint.Scheme -cne 'https' -or $endpoint.Port -ne 443 -or $endpoint.UserInfo -or $endpoint.Fragment -or -not $validHost -or
+        ([datetimeoffset]$connection.TokenExpiryTimeUTC) -le [datetimeoffset]::UtcNow) { throw 'Unexpected endpoint or expired token.' }
+    if ($CommandName) {
+      $command = Get-Command -Name $CommandName -ErrorAction Stop
+      $moduleName = ([string]$connection.ModuleName -split '[\\/]')[-1]
+      if ([string]::IsNullOrWhiteSpace($moduleName) -or $command.CommandType -ne 'Function' -or
+          $command.ModuleName -cne $moduleName) { throw 'Mutation command is not owned by the verified session.' }
+    }
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message "The selected $Service session, identity, or command could not be verified before mutation.")
+  }
 }
 
 function Connect-ExchangeForBootstrap {
@@ -56,18 +107,20 @@ function Connect-ExchangeForBootstrap {
 
   try {
     $outlookToken = Get-AzCliAccessToken -ResourceUrl 'https://outlook.office365.com'
-    Connect-ExchangeOnline -AccessToken $outlookToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
+    Connect-ExchangeOnline -AccessToken $outlookToken -UserPrincipalName $upn -ShowBanner:$false -ErrorAction Stop | Out-Null
   }
   catch {
     if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
-    Write-Warning "Exchange Online access-token auth was unavailable. Trying the normal cached account or browser sign-in for '$upn'."
+    Write-Warning 'Exchange Online access-token auth was unavailable. Trying the normal cached account or browser sign-in.'
+    Assert-AuditHookContext -Context $script:AuditHookContext
     try {
-      Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false | Out-Null
+      Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false -ErrorAction Stop | Out-Null
     }
     catch {
       throw "Exchange Online cached or browser sign-in for '$upn' could not complete. Review the selected account and interactive authentication state."
     }
   }
+  Assert-AuditNativeContext -Service Exchange
 }
 
 function Connect-ComplianceForBootstrap {
@@ -76,22 +129,23 @@ function Connect-ComplianceForBootstrap {
   $upn = Get-AzCliUserPrincipalName
   $complianceToken = Get-AzCliAccessToken -ResourceUrl 'https://ps.compliance.protection.outlook.com'
 
+  $commands = 'Get-UnifiedAuditLogRetentionPolicy', 'New-UnifiedAuditLogRetentionPolicy'
   try {
-    Connect-IPPSSession -AccessToken $complianceToken -UserPrincipalName $upn -ShowBanner:$false | Out-Null
-    return $true
+    Connect-IPPSSession -AccessToken $complianceToken -UserPrincipalName $upn -CommandName $commands -ShowBanner:$false -ErrorAction Stop | Out-Null
   }
   catch {
-    Write-Warning "Security & Compliance PowerShell access-token auth with UserPrincipalName failed. Retrying with Organization. Error: $($_.Exception.Message)"
+    Write-Warning 'Security & Compliance PowerShell access-token auth failed. Retrying with Organization.'
+    Assert-AuditHookContext -Context $script:AuditHookContext
+    try {
+      Connect-IPPSSession -AccessToken $complianceToken -Organization $Organization -CommandName $commands -ShowBanner:$false -ErrorAction Stop | Out-Null
+    }
+    catch {
+      Write-Warning 'Security & Compliance PowerShell access-token auth failed.'
+      return $false
+    }
   }
-
-  try {
-    Connect-IPPSSession -AccessToken $complianceToken -Organization $Organization -ShowBanner:$false | Out-Null
-    return $true
-  }
-  catch {
-    Write-Warning "Security & Compliance PowerShell access-token auth failed: $($_.Exception.Message)"
-    return $false
-  }
+  Assert-AuditNativeContext -Service Compliance
+  return $true
 }
 
 function Get-ExchangeOrganizationDomain {
@@ -130,7 +184,13 @@ function Ensure-ExchangeManageAsAppAssignment {
 
   $managedIdentitySp = Invoke-GraphRest -Method 'GET' -Uri ("https://graph.microsoft.com/v1.0/servicePrincipals/{0}?`$select=id,appId" -f $ManagedIdentityObjectId)
   $exchangeResourceResponse = Invoke-GraphRest -Method 'GET' -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '00000002-0000-0ff1-ce00-000000000000'&`$select=id,appId"
-  $exchangeResourceSp = @($exchangeResourceResponse.value | Select-Object -First 1)
+  $exchangeResources = @($exchangeResourceResponse.value)
+  if ($managedIdentitySp.id -ine $ManagedIdentityObjectId -or -not (Test-AuditGuid $managedIdentitySp.appId) -or
+      $exchangeResources.Count -ne 1 -or $exchangeResources[0].appId -ine '00000002-0000-0ff1-ce00-000000000000' -or
+      -not (Test-AuditGuid $exchangeResources[0].id)) {
+    throw (New-AuditOperatorContextException -Message 'Graph service-principal discovery did not match the selected Automation and Exchange identities.')
+  }
+  $exchangeResourceSp = $exchangeResources[0]
   $exchangeManageAsAppRoleId = 'dc50a0fb-09a3-484d-be87-e023b12c6440'
 
   $existingAssignmentsResponse = Invoke-GraphRest -Method 'GET' -Uri ("https://graph.microsoft.com/v1.0/servicePrincipals/{0}/appRoleAssignments?`$select=id,resourceId,appRoleId" -f $ManagedIdentityObjectId)
@@ -172,6 +232,7 @@ function Ensure-ExchangeServicePrincipal {
     } | Select-Object -First 1)
 
   if ($existingSp.Count -eq 0) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'New-ServicePrincipal'
     New-ServicePrincipal -AppId $ManagedIdentityAppId -ObjectId $ManagedIdentityObjectId -DisplayName 'exchange-auditing-automation' | Out-Null
   }
 }
@@ -182,26 +243,31 @@ function Ensure-MailboxAuditingRole {
   $allowedCommands = @('Get-Mailbox', 'Get-MailboxAuditBypassAssociation', 'Set-Mailbox')
 
   if (-not (Get-ManagementRole -Identity $roleName -ErrorAction SilentlyContinue)) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'New-ManagementRole'
     New-ManagementRole -Name $roleName -Parent 'Audit Logs' | Out-Null
   }
 
   $entries = @(Get-ManagementRoleEntry "$roleName\*" -ErrorAction Stop)
   foreach ($entry in $entries) {
     if ($entry.Name -notin $allowedCommands) {
+      Assert-AuditNativeContext -Service Exchange -CommandName 'Remove-ManagementRoleEntry'
       Remove-ManagementRoleEntry -Identity "$roleName\$($entry.Name)" -Confirm:$false | Out-Null
     }
   }
 
   foreach ($commandName in @('Get-Mailbox', 'Get-MailboxAuditBypassAssociation')) {
     if (-not (Get-ManagementRoleEntry "$roleName\$commandName" -ErrorAction SilentlyContinue)) {
+      Assert-AuditNativeContext -Service Exchange -CommandName 'Add-ManagementRoleEntry'
       Add-ManagementRoleEntry -Identity "$roleName\$commandName" | Out-Null
     }
   }
 
   if (Get-ManagementRoleEntry "$roleName\Set-Mailbox" -ErrorAction SilentlyContinue) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'Remove-ManagementRoleEntry'
     Remove-ManagementRoleEntry -Identity "$roleName\Set-Mailbox" -Confirm:$false | Out-Null
   }
 
+  Assert-AuditNativeContext -Service Exchange -CommandName 'Add-ManagementRoleEntry'
   Add-ManagementRoleEntry -Identity "$roleName\Set-Mailbox" -Parameters $allowedSetMailboxParameters | Out-Null
 }
 
@@ -212,6 +278,7 @@ function Ensure-RoleGroupMembership {
   $roleName = 'Mailbox Auditing'
 
   if (-not (Get-RoleGroup -Identity $roleGroupName -ErrorAction SilentlyContinue)) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'New-RoleGroup'
     New-RoleGroup `
       -Name $roleGroupName `
       -Description 'Limited scope for Azure Automation to set Advanced Auditing entries' `
@@ -232,6 +299,7 @@ function Ensure-RoleGroupMembership {
   ).Count -gt 0
 
   if (-not $memberExists) {
+    Assert-AuditNativeContext -Service Exchange -CommandName 'Add-RoleGroupMember'
     Add-RoleGroupMember -Identity $roleGroupName -Member $ManagedIdentityObjectId -Confirm:$false | Out-Null
 
     $members = @(Get-RoleGroupMember -Identity $roleGroupName -ResultSize Unlimited)
@@ -258,6 +326,7 @@ function Ensure-AuditRetentionPolicy {
   )
 
   if (-not (Get-UnifiedAuditLogRetentionPolicy -Identity $PolicyName -ErrorAction SilentlyContinue)) {
+    Assert-AuditNativeContext -Service Compliance -CommandName 'New-UnifiedAuditLogRetentionPolicy'
     New-UnifiedAuditLogRetentionPolicy `
       -Name $PolicyName `
       -Description 'One year retention policy for all audit records' `
@@ -290,9 +359,15 @@ function Ensure-AuditRetentionPolicy {
 }
 
 Write-Section -Message 'Loading azd environment values'
-$azdValues = Get-AzdEnvironmentValues
-$subscriptionId = Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $azdValues
-$tenantId = Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $azdValues
+$environmentName = Get-AuditHookEnvironmentName
+$azdValues = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $environmentName -RequireResourceValues
+$script:AuditHookContext = New-AuditHookContext -EnvironmentName $environmentName -AzdValues $azdValues -TargetNames @(
+  'AUTOMATION_PRINCIPAL_ID', 'AUTOMATION_JOB_SCHEDULE_ID', 'EXCHANGE_ORGANIZATION',
+  'VALIDATE_CONNECTION_RUNBOOK_NAME', 'VALIDATE_CONFIGURATION_RUNBOOK_NAME', 'EXCHANGE_ORGANIZATION_VARIABLE_NAME',
+  'OPERATIONAL_ALERTS_ENABLED'
+)
+$subscriptionId = $script:AuditHookContext.Operator.SubscriptionId
+$tenantId = $script:AuditHookContext.Operator.TenantId
 $script:AuditOperatorSubscriptionId = $subscriptionId
 $script:AuditOperatorTenantId = $tenantId
 $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $azdValues
@@ -303,13 +378,11 @@ $validateConfigurationRunbookName = Get-ValueFromEnvironment -Name 'VALIDATE_CON
 $exchangeOrganizationVariableName = Get-ValueFromEnvironment -Name 'EXCHANGE_ORGANIZATION_VARIABLE_NAME' -AzdValues $azdValues
 $jobScheduleId = Get-ValueFromEnvironment -Name 'AUTOMATION_JOB_SCHEDULE_ID' -AzdValues $azdValues
 
-if ([string]::IsNullOrWhiteSpace($resourceGroupName) -or [string]::IsNullOrWhiteSpace($automationAccountName) -or [string]::IsNullOrWhiteSpace($managedIdentityObjectId) -or [string]::IsNullOrWhiteSpace($jobScheduleId)) {
+if ($resourceGroupName -notmatch '^[A-Za-z0-9_.()-]{1,90}$' -or $resourceGroupName.EndsWith('.') -or
+    $automationAccountName -notmatch '^[A-Za-z0-9_-]{1,50}$' -or
+    -not (Test-AuditGuid $managedIdentityObjectId) -or -not (Test-AuditGuid $jobScheduleId)) {
   throw 'Required azd environment values were not found after provision.'
 }
-
-# Bind the operator's cached Azure CLI identity to the selected environment before
-# any ownership receipt is persisted. The token helper verifies account mapping first.
-Get-AuditScopedAccessToken -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceUrl 'https://management.azure.com' | Out-Null
 
 Write-Section -Message 'Recording provisioned Automation ownership'
 Ensure-Command -Name 'az'
@@ -317,13 +390,13 @@ $accountId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automati
 $accountJson = & az automation account show --subscription $subscriptionId --resource-group $resourceGroupName --name $automationAccountName --only-show-errors -o json
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) { throw 'Could not verify the provisioned Automation account.' }
 $jobScheduleUri = 'https://management.azure.com{0}/jobSchedules/{1}?api-version=2023-11-01' -f $accountId, $jobScheduleId
-$jobScheduleJson = & az rest --method GET --uri $jobScheduleUri --only-show-errors -o json
+$jobScheduleJson = & az rest --method GET --uri $jobScheduleUri --subscription $subscriptionId --only-show-errors -o json
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($jobScheduleJson)) { throw 'Could not verify the provisioned Automation jobSchedule.' }
 Assert-AuditOwnershipReceiptTarget -ExpectedAccountId $accountId -ExpectedPrincipalId $managedIdentityObjectId -ExpectedJobScheduleId $jobScheduleId `
   -Account ($accountJson | ConvertFrom-Json -ErrorAction Stop) -JobSchedule ($jobScheduleJson | ConvertFrom-Json -ErrorAction Stop)
-Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_ACCOUNT_ID' -Value $accountId
-Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_PRINCIPAL_ID' -Value $managedIdentityObjectId
-Set-AzdEnvironmentValue -Name 'AUTOMATION_OWNED_JOB_SCHEDULE_ID' -Value $jobScheduleId
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_OWNED_ACCOUNT_ID' -Value $accountId -Context $script:AuditHookContext
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_OWNED_PRINCIPAL_ID' -Value $managedIdentityObjectId -Context $script:AuditHookContext
+Set-AuditHookEnvironmentValue -Name 'AUTOMATION_OWNED_JOB_SCHEDULE_ID' -Value $jobScheduleId -Context $script:AuditHookContext
 
 Write-Section -Message 'Installing required local PowerShell modules'
 Ensure-PowerShellModule -Name 'ExchangeOnlineManagement' -MinimumVersion '3.10.1'
@@ -343,6 +416,7 @@ $degradedConditions = [System.Collections.Generic.List[string]]::new()
 Write-Section -Message 'Configuring audit prerequisites'
 $adminAuditConfig = Get-AdminAuditLogConfig
 if (-not $adminAuditConfig.UnifiedAuditLogIngestionEnabled) {
+  Assert-AuditNativeContext -Service Exchange -CommandName 'Set-AdminAuditLogConfig'
   Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true
 
   $adminAuditConfig = Get-AdminAuditLogConfig
@@ -372,13 +446,13 @@ if ($complianceConnected) {
     Ensure-AuditRetentionPolicy -PolicyName $retentionPolicyName
   } catch {
     if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
-    if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+    if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupFailed' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName -HookContext $script:AuditHookContext }
     throw
   }
-  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupVerified' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupVerified' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName -HookContext $script:AuditHookContext }
 }
 else {
-  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupUnavailable' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName }
+  if ($operationalAlertsEnabled) { Save-AuditRetentionSetupState -Enabled $true -SetupState 'setupUnavailable' -SubscriptionId $subscriptionId -TenantId $tenantId -ResourceGroupName $resourceGroupName -AutomationAccountName $automationAccountName -HookContext $script:AuditHookContext }
   $retentionWarning = "Unified audit log retention policy bootstrap was skipped because Security & Compliance PowerShell authentication was not available. Configure and validate '$retentionPolicyName' manually."
   $degradedConditions.Add($retentionWarning)
   Write-Warning $retentionWarning
@@ -396,10 +470,11 @@ Set-AutomationVariableValue `
   -TenantId $tenantId `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
+  -HookContext $script:AuditHookContext `
   -VariableName $exchangeOrganizationVariableName `
   -Value $exchangeOrganization
 
-Set-AzdEnvironmentValue -Name 'EXCHANGE_ORGANIZATION' -Value $exchangeOrganization
+Set-AuditHookEnvironmentValue -Name 'EXCHANGE_ORGANIZATION' -Value $exchangeOrganization -Context $script:AuditHookContext
 
 Write-Section -Message 'Publishing repository runbooks to Azure Automation'
 $runbooksPath = Get-RunbooksPath
@@ -408,6 +483,7 @@ Publish-AutomationRunbookContent `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
   -RunbookName 'Enable-AdvancedAuditing' `
+  -HookContext $script:AuditHookContext `
   -FilePath (Join-Path -Path $runbooksPath -ChildPath 'Enable-AdvancedAuditing.ps1')
 
 Publish-AutomationRunbookContent `
@@ -415,6 +491,7 @@ Publish-AutomationRunbookContent `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
   -RunbookName $validateConnectionRunbookName `
+  -HookContext $script:AuditHookContext `
   -FilePath (Join-Path -Path $runbooksPath -ChildPath 'Validate-ExchangeManagedIdentity.ps1')
 
 Publish-AutomationRunbookContent `
@@ -422,6 +499,7 @@ Publish-AutomationRunbookContent `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
   -RunbookName $validateConfigurationRunbookName `
+  -HookContext $script:AuditHookContext `
   -FilePath (Join-Path -Path $runbooksPath -ChildPath 'Validate-AdvancedAuditingConfiguration.ps1')
 
 Write-Section -Message 'Validating the managed identity connection'
@@ -429,7 +507,7 @@ Start-AutomationRunbookAndWait `
   -SubscriptionId $subscriptionId `
   -ResourceGroupName $resourceGroupName `
   -AutomationAccountName $automationAccountName `
-  -RunbookName $validateConnectionRunbookName | Out-Null
+  -RunbookName $validateConnectionRunbookName -HookContext $script:AuditHookContext | Out-Null
 
 $runbookFailures = [System.Collections.Generic.List[string]]::new()
 $runbookStartParameters = @{
@@ -437,6 +515,7 @@ $runbookStartParameters = @{
   ResourceGroupName = $resourceGroupName
   AutomationAccountName = $automationAccountName
   RunbookName = 'Enable-AdvancedAuditing'
+  HookContext = $script:AuditHookContext
 }
 if ($hasOperationalAlertsOutput) {
   $runbookStartParameters.Parameters = @{
@@ -460,9 +539,10 @@ try {
     -SubscriptionId $subscriptionId `
     -ResourceGroupName $resourceGroupName `
     -AutomationAccountName $automationAccountName `
-    -RunbookName $validateConfigurationRunbookName | Out-Null
+    -RunbookName $validateConfigurationRunbookName -HookContext $script:AuditHookContext | Out-Null
 }
 catch {
+  if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
   $runbookFailures.Add("Advanced auditing validation failed: $($_.Exception.Message)")
   Write-Warning $runbookFailures[$runbookFailures.Count - 1]
 }

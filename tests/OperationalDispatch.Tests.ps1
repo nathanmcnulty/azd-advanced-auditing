@@ -1,4 +1,5 @@
 BeforeAll {
+    $script:AuditHookContext = 'offline-fixture'
     foreach($name in @('az','Invoke-WebRequest','Invoke-RestMethod','Connect-ExchangeOnline','Connect-IPPSSession','Connect-MgGraph','Connect-AzAccount')){Set-Item ('Function:global:'+$name) -Value {throw 'Offline fixture forbids native/provider fallback.'}}
     $source=Get-Content "$PSScriptRoot/../hooks/postprovision.ps1" -Raw
     $start=$source.IndexOf('$operationalAlertsEnabled = $false')
@@ -18,13 +19,13 @@ BeforeAll {
     function New-AuditOperatorContextException { param($Message) $exception=[System.InvalidOperationException]::new($Message);$exception.Data['AuditOperatorContext']=$true;return $exception }
     function Test-AuditOperatorContextException { param($ErrorRecord) return ($ErrorRecord.Exception.Data['AuditOperatorContext'] -eq $true) }
     function Start-AutomationRunbookAndWait {
-        param([string]$SubscriptionId,[string]$ResourceGroupName,[string]$AutomationAccountName,[string]$RunbookName,[hashtable]$Parameters)
+        param([string]$SubscriptionId,[string]$ResourceGroupName,[string]$AutomationAccountName,[string]$RunbookName,[hashtable]$Parameters,$HookContext)
         $script:capturedRunbookStartArguments=@{}
         foreach($key in $PSBoundParameters.Keys){$script:capturedRunbookStartArguments[$key]=$PSBoundParameters[$key]}
     }
     function Get-ValueFromEnvironment {throw 'Optional flag must not use process-first helper'}
     function Ensure-AuditRetentionPolicy {param($PolicyName) $script:policyCalls++; if($script:contextFailure){throw (New-AuditOperatorContextException -Message 'Fixture target mismatch.')}; if($script:failPolicy){throw 'fixture policy failure'}}
-    function Save-AuditRetentionSetupState {param($Enabled,$SetupState,$SubscriptionId,$TenantId,$ResourceGroupName,$AutomationAccountName) $script:states.Add("${Enabled}:${SetupState}")}
+    function Save-AuditRetentionSetupState {param($Enabled,$SetupState,$SubscriptionId,$TenantId,$ResourceGroupName,$AutomationAccountName,$HookContext) $script:states.Add("${Enabled}:${SetupState}")}
 }
 Describe 'Actual postprovision retention dispatch block' {
     BeforeEach {
@@ -108,7 +109,7 @@ Describe 'Actual postprovision validation job dispatch' {
         $hasOperationalAlertsOutput=$false;$operationalAlertsEnabled=$false
         $script:jobCalls=[Collections.Generic.List[string]]::new();$script:jobFailure=''
         function Start-AutomationRunbookAndWait {
-            param($SubscriptionId,$ResourceGroupName,$AutomationAccountName,$RunbookName,$Parameters)
+            param($SubscriptionId,$ResourceGroupName,$AutomationAccountName,$RunbookName,$Parameters,$HookContext)
             $script:jobCalls.Add($RunbookName)
             if($RunbookName -eq 'Enable-AdvancedAuditing' -and $script:jobFailure -eq 'guard') { throw (New-AuditOperatorContextException -Message 'Fixture target mismatch.') }
             if($RunbookName -eq 'Enable-AdvancedAuditing' -and $script:jobFailure -eq 'ordinary') { throw 'Fixture mailbox failure.' }

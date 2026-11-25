@@ -11,15 +11,15 @@
       "evidence": [
         {
           "path": "infra/main.bicep",
-          "sha256": "d3e8105b32079e3ee41a79e41f3b521f0d3055ac0918c02aafe6aa21ce084f16"
+          "sha256": "7b5303c252f0b004073062e08973fa8bd284eb69864a06a0d12c3f919c01e2be"
         },
         {
           "path": "hooks/Common.ps1",
-          "sha256": "9c29028fd41c53cdaa3bf75eb9616c0d3fb3dbfb6aa7d6110be449666c36d46e"
+          "sha256": "18517de951afd6b614cc1e02a929f046e5428041f7c34c771a8a54c542033263"
         }
       ],
       "feature": "baseline-deployment",
-      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication. Preprovision and predown bind azd commands to the injected environment, recheck selected subscription metadata and operator identity, and verify the exact lock before removal; no grant is made by this inventory.",
+      "rationale": "Existing account/runtime/runbook/schedule/variable/lock deployment and bootstrap publication. Maintained hooks recheck the selected environment, subscription metadata, operator and Automation target before writes. Predown verifies the named ARM lock before removal. This inventory makes no grant.",
       "defaultEnabled": true,
       "resource": "Azure Resource Manager",
       "principal": "Selected deployment operator",
@@ -33,11 +33,11 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "77cec1aaada6b5a1de2f433b6163c0f920e6ed2c785748c5ff3a572ff87ba211"
+          "sha256": "3ff6f7c567e56312404c21e290da645098d9702bdf6be800ec38c4b5b1dcebc5"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
+          "sha256": "9c32f8d121baf3652b50a24ff10663016a9f0e30da5ec12f2bf9960c206c652f"
         }
       ],
       "feature": "mailbox-auditing",
@@ -55,11 +55,11 @@
       "evidence": [
         {
           "path": "hooks/postprovision.ps1",
-          "sha256": "77cec1aaada6b5a1de2f433b6163c0f920e6ed2c785748c5ff3a572ff87ba211"
+          "sha256": "3ff6f7c567e56312404c21e290da645098d9702bdf6be800ec38c4b5b1dcebc5"
         },
         {
           "path": "runbooks/Enable-AdvancedAuditing.ps1",
-          "sha256": "5e4e6f38fdc99f354a78c83ee0cddb9c18f592a8c0572487f7cabe7545996cec"
+          "sha256": "9c32f8d121baf3652b50a24ff10663016a9f0e30da5ec12f2bf9960c206c652f"
         }
       ],
       "feature": "mailbox-auditing",
@@ -95,11 +95,11 @@
       "evidence": [
         {
           "path": "infra/main.bicep",
-          "sha256": "d3e8105b32079e3ee41a79e41f3b521f0d3055ac0918c02aafe6aa21ce084f16"
+          "sha256": "7b5303c252f0b004073062e08973fa8bd284eb69864a06a0d12c3f919c01e2be"
         },
         {
           "path": "hooks/AuditOperationalState.ps1",
-          "sha256": "6d211140085769f9aa68c365fa0c92977af5acbae93a8663aaa1b9d2fc95bce5"
+          "sha256": "b7905986734e715f535ce3de2217ede540499c5e7946be6e4d81e9a12164a597"
         }
       ],
       "feature": "operational-alerts",
