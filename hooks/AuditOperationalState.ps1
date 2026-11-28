@@ -12,11 +12,14 @@ function New-AuditRetentionSetupState {
 
 function Save-AuditRetentionSetupState {
     [CmdletBinding()]
-    param([bool]$Enabled, [string]$SetupState, [string]$SubscriptionId, [string]$ResourceGroupName, [string]$AutomationAccountName)
+    param([bool]$Enabled, [string]$SetupState, [string]$SubscriptionId, [string]$TenantId, [string]$ResourceGroupName, [string]$AutomationAccountName, $HookContext)
     if (-not $Enabled) { return }
     $id='/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $SubscriptionId,$ResourceGroupName,$AutomationAccountName
     $value=New-AuditRetentionSetupState -SetupState $SetupState -AccountId $id
     try {
-        Set-AutomationVariableValue -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -VariableName 'AuditRetentionSetupState' -Value $value
-    } catch { throw 'Could not persist optional retention-setup evidence. No current retention readiness is established.' }
+        Set-AutomationVariableValue -SubscriptionId $SubscriptionId -TenantId $TenantId -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -VariableName 'AuditRetentionSetupState' -Value $value -HookContext $HookContext
+    } catch {
+        if (Test-AuditOperatorContextException -ErrorRecord $_) { throw }
+        throw 'Could not persist optional retention-setup evidence. No current retention readiness is established.'
+    }
 }

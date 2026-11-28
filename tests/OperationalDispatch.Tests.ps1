@@ -1,4 +1,5 @@
 BeforeAll {
+    $script:AuditHookContext = 'offline-fixture'
     foreach($name in @('az','Invoke-WebRequest','Invoke-RestMethod','Connect-ExchangeOnline','Connect-IPPSSession','Connect-MgGraph','Connect-AzAccount')){Set-Item ('Function:global:'+$name) -Value {throw 'Offline fixture forbids native/provider fallback.'}}
     $source=Get-Content "$PSScriptRoot/../hooks/postprovision.ps1" -Raw
     $start=$source.IndexOf('$operationalAlertsEnabled = $false')
@@ -15,19 +16,21 @@ BeforeAll {
     if($dispatchStart -lt 0 -or $dispatchTry -lt $dispatchStart -or $dispatchEnd -lt $dispatchTry){throw 'Expected the remediation runbook dispatch parameter block.'}
     $script:runbookDispatch=[scriptblock]::Create($source.Substring($dispatchStart,$dispatchEnd-$dispatchStart)+'catch { throw }')
     function Write-Section { param($Message) }
+    function New-AuditOperatorContextException { param($Message) $exception=[System.InvalidOperationException]::new($Message);$exception.Data['AuditOperatorContext']=$true;return $exception }
+    function Test-AuditOperatorContextException { param($ErrorRecord) return ($ErrorRecord.Exception.Data['AuditOperatorContext'] -eq $true) }
     function Start-AutomationRunbookAndWait {
-        param([string]$SubscriptionId,[string]$ResourceGroupName,[string]$AutomationAccountName,[string]$RunbookName,[hashtable]$Parameters)
+        param([string]$SubscriptionId,[string]$ResourceGroupName,[string]$AutomationAccountName,[string]$RunbookName,[hashtable]$Parameters,$HookContext)
         $script:capturedRunbookStartArguments=@{}
         foreach($key in $PSBoundParameters.Keys){$script:capturedRunbookStartArguments[$key]=$PSBoundParameters[$key]}
     }
     function Get-ValueFromEnvironment {throw 'Optional flag must not use process-first helper'}
-    function Ensure-AuditRetentionPolicy {param($PolicyName) $script:policyCalls++; if($script:failPolicy){throw 'fixture policy failure'}}
-    function Save-AuditRetentionSetupState {param($Enabled,$SetupState,$SubscriptionId,$ResourceGroupName,$AutomationAccountName) $script:states.Add("${Enabled}:${SetupState}")}
+    function Ensure-AuditRetentionPolicy {param($PolicyName) $script:policyCalls++; if($script:contextFailure){throw (New-AuditOperatorContextException -Message 'Fixture target mismatch.')}; if($script:failPolicy){throw 'fixture policy failure'}}
+    function Save-AuditRetentionSetupState {param($Enabled,$SetupState,$SubscriptionId,$TenantId,$ResourceGroupName,$AutomationAccountName,$HookContext) $script:states.Add("${Enabled}:${SetupState}")}
 }
 Describe 'Actual postprovision retention dispatch block' {
     BeforeEach {
-        $script:failPolicy=$false;$script:states=[Collections.Generic.List[string]]::new();$script:policyCalls=0
-        $azdValues=@{OPERATIONAL_ALERTS_ENABLED='true'};$subscriptionId='cccccccc-cccc-cccc-cccc-cccccccccccc';$resourceGroupName='fixture-rg';$automationAccountName='fixture-audit';$retentionPolicyName='fixture-policy'
+        $script:failPolicy=$false;$script:contextFailure=$false;$script:states=[Collections.Generic.List[string]]::new();$script:policyCalls=0
+        $azdValues=@{OPERATIONAL_ALERTS_ENABLED='true'};$subscriptionId='cccccccc-cccc-cccc-cccc-cccccccccccc';$tenantId='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';$resourceGroupName='fixture-rg';$automationAccountName='fixture-audit';$retentionPolicyName='fixture-policy'
         $degradedConditions=[Collections.Generic.List[string]]::new()
     }
     It 'records verified bootstrap after the existing policy succeeds' {
@@ -45,6 +48,12 @@ Describe 'Actual postprovision retention dispatch block' {
         $complianceConnected=$true;$script:failPolicy=$true
         {. $script:branch}|Should -Throw 'fixture policy failure'
         @($script:states)|Should -Be @('True:setupFailed')
+    }
+    It 'does not write failed retention state after a target-context failure' {
+        $complianceConnected=$true
+        $script:contextFailure=$true
+        { . $script:branch } | Should -Throw 'Fixture target mismatch.'
+        $script:states.Count | Should -Be 0
     }
     It 'ignores conflicting true process environment when deployed false, making zero optional save calls' {
         $complianceConnected=$false;$azdValues.OPERATIONAL_ALERTS_ENABLED='false'
@@ -86,6 +95,35 @@ Describe 'Actual postprovision retention dispatch block' {
         $script:capturedRunbookStartArguments=$null
         & $script:runbookDispatch
         $script:capturedRunbookStartArguments.Parameters.OperationalAlertsEnabled|Should -BeExactly 'true'
+    }
+}
+Describe 'Actual postprovision validation job dispatch' {
+    BeforeAll {
+        $source=Get-Content "$PSScriptRoot/../hooks/postprovision.ps1" -Raw
+        $start=$source.IndexOf('$runbookFailures =')
+        if($start -lt 0){throw 'Expected postprovision validation job dispatch.'}
+        $script:jobDispatch=[scriptblock]::Create($source.Substring($start))
+    }
+    BeforeEach {
+        $subscriptionId='cccccccc-cccc-cccc-cccc-cccccccccccc';$resourceGroupName='fixture-rg';$automationAccountName='fixture-audit';$validateConfigurationRunbookName='validate'
+        $hasOperationalAlertsOutput=$false;$operationalAlertsEnabled=$false
+        $script:jobCalls=[Collections.Generic.List[string]]::new();$script:jobFailure=''
+        function Start-AutomationRunbookAndWait {
+            param($SubscriptionId,$ResourceGroupName,$AutomationAccountName,$RunbookName,$Parameters,$HookContext)
+            $script:jobCalls.Add($RunbookName)
+            if($RunbookName -eq 'Enable-AdvancedAuditing' -and $script:jobFailure -eq 'guard') { throw (New-AuditOperatorContextException -Message 'Fixture target mismatch.') }
+            if($RunbookName -eq 'Enable-AdvancedAuditing' -and $script:jobFailure -eq 'ordinary') { throw 'Fixture mailbox failure.' }
+        }
+    }
+    It 'stops before the validation job after a target-context failure' {
+        $script:jobFailure='guard'
+        { & $script:jobDispatch } | Should -Throw 'Fixture target mismatch.'
+        @($script:jobCalls) | Should -Be @('Enable-AdvancedAuditing')
+    }
+    It 'preserves ordinary remediation failure reporting and runs validation' {
+        $script:jobFailure='ordinary'
+        { & $script:jobDispatch } | Should -Throw '*Fixture mailbox failure*'
+        @($script:jobCalls) | Should -Be @('Enable-AdvancedAuditing','validate')
     }
 }
 AfterAll {

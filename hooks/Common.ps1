@@ -16,6 +16,298 @@ function Ensure-Command {
   }
 }
 
+function New-AuditOperatorContextException {
+  param([Parameter(Mandatory = $true)][string]$Message)
+
+  $exception = [System.InvalidOperationException]::new($Message)
+  $exception.Data['AuditOperatorContext'] = $true
+  return $exception
+}
+
+function Test-AuditOperatorContextException {
+  param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+  $exception = $ErrorRecord
+  if ($ErrorRecord.PSObject.Properties.Match('Exception').Count -gt 0) {
+    $exception = $ErrorRecord.Exception
+  }
+
+  while ($null -ne $exception) {
+    if ($exception.Data -and $exception.Data['AuditOperatorContext'] -eq $true) {
+      return $true
+    }
+    $exception = $exception.InnerException
+  }
+
+  return $false
+}
+
+function Get-AuditOperatorTargetSelector {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][hashtable]$AzdValues
+  )
+
+  $upperName = $Name.ToUpperInvariant()
+  $environmentValue = ''
+  if ($AzdValues.ContainsKey($upperName)) {
+    $environmentValue = ([string]$AzdValues[$upperName]).Trim()
+  }
+  $processValue = ([System.Environment]::GetEnvironmentVariable($Name) ?? '').Trim()
+
+  if (-not [string]::IsNullOrWhiteSpace($environmentValue) -and
+      -not [string]::IsNullOrWhiteSpace($processValue) -and
+      -not [string]::Equals($environmentValue, $processValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw (New-AuditOperatorContextException -Message "The process and selected azd values for '$Name' do not match.")
+  }
+
+  $value = if (-not [string]::IsNullOrWhiteSpace($processValue)) { $processValue } else { $environmentValue }
+  $parsedId = [guid]::Empty
+  if ([string]::IsNullOrWhiteSpace($value) -or -not [guid]::TryParse($value, [ref]$parsedId)) {
+    throw (New-AuditOperatorContextException -Message "An explicit GUID for '$Name' is required in the selected azd environment or process environment.")
+  }
+
+  return $parsedId.ToString()
+}
+
+function Get-AuditOperatorAccount {
+  param(
+    [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$TenantId
+  )
+
+  $parsedSubscriptionId = [guid]::Empty
+  $parsedTenantId = [guid]::Empty
+  if (-not [guid]::TryParse($SubscriptionId, [ref]$parsedSubscriptionId) -or
+      -not [guid]::TryParse($TenantId, [ref]$parsedTenantId)) {
+    throw (New-AuditOperatorContextException -Message 'Explicit Azure CLI subscription and tenant selectors must be GUIDs.')
+  }
+  $SubscriptionId = $parsedSubscriptionId.ToString()
+  $TenantId = $parsedTenantId.ToString()
+
+  try {
+    Ensure-Command -Name 'az'
+    $accountJson = & az account show --subscription $SubscriptionId --only-show-errors --output json 2>$null
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Could not read the explicitly selected Azure CLI account.')
+  }
+
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) {
+    throw (New-AuditOperatorContextException -Message 'Could not read the explicitly selected Azure CLI account.')
+  }
+
+  try {
+    $account = $accountJson | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account metadata.')
+  }
+
+  if ($null -eq $account -or $account -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account metadata.')
+  }
+
+  $accountIdProperty = $account.PSObject.Properties['id']
+  $tenantIdProperty = $account.PSObject.Properties['tenantId']
+  $userProperty = $account.PSObject.Properties['user']
+  $userNameProperty = if ($null -ne $userProperty -and
+      $userProperty.Value -is [System.Management.Automation.PSCustomObject]) {
+    $userProperty.Value.PSObject.Properties['name']
+  }
+  if ($null -eq $accountIdProperty -or $null -eq $tenantIdProperty -or $null -eq $userNameProperty -or
+      $accountIdProperty.Value -isnot [string] -or $tenantIdProperty.Value -isnot [string] -or
+      $userNameProperty.Value -isnot [string] -or
+      [string]$accountIdProperty.Value -ine $SubscriptionId -or [string]$tenantIdProperty.Value -ine $TenantId -or
+      [string]::IsNullOrWhiteSpace($userNameProperty.Value)) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI account metadata does not match the explicit subscription and tenant selectors.')
+  }
+
+  return $account
+}
+
+function Get-AuditOperatorIdentity {
+  param([Parameter(Mandatory = $true)][object]$Account)
+
+  $userProperty = $Account.PSObject.Properties['user']
+  if ($null -eq $userProperty -or $userProperty.Value -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account identity metadata.')
+  }
+
+  $nameProperty = $userProperty.Value.PSObject.Properties['name']
+  $typeProperty = $userProperty.Value.PSObject.Properties['type']
+  if ($null -eq $nameProperty -or $nameProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($nameProperty.Value)) {
+    throw (New-AuditOperatorContextException -Message 'Azure CLI returned malformed selected-account identity metadata.')
+  }
+
+  if ($null -ne $typeProperty -and $typeProperty.Value -is [string] -and -not [string]::IsNullOrWhiteSpace($typeProperty.Value)) {
+    return ('{0}|{1}' -f [string]$typeProperty.Value, [string]$nameProperty.Value)
+  }
+
+  return [string]$nameProperty.Value
+}
+
+function Get-AuditScopedAccessToken {
+  param(
+    [Parameter(Mandatory = $true)][string]$ResourceUrl,
+    [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$TenantId,
+    [Parameter(Mandatory = $false)][switch]$IncludeOperatorIdentity
+  )
+
+  $parsedSubscriptionId = [guid]::Empty
+  $parsedTenantId = [guid]::Empty
+  if (-not [guid]::TryParse($SubscriptionId, [ref]$parsedSubscriptionId) -or
+      -not [guid]::TryParse($TenantId, [ref]$parsedTenantId)) {
+    throw (New-AuditOperatorContextException -Message 'Explicit Azure CLI subscription and tenant selectors must be GUIDs.')
+  }
+  $SubscriptionId = $parsedSubscriptionId.ToString()
+  $TenantId = $parsedTenantId.ToString()
+  if ($ResourceUrl -notin @(
+      'https://management.azure.com',
+      'https://graph.microsoft.com',
+      'https://outlook.office365.com',
+      'https://ps.compliance.protection.outlook.com'
+    )) {
+    throw (New-AuditOperatorContextException -Message 'The requested Azure CLI token audience is not supported by this hook.')
+  }
+
+  # Azure CLI resolves the account and tenant from this explicit subscription.
+  $account = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
+
+  try {
+    Ensure-Command -Name 'az'
+    $tokenArguments = @('account', 'get-access-token', '--subscription', $SubscriptionId)
+    $tokenArguments += @('--resource', $ResourceUrl, '--only-show-errors', '--output', 'json')
+    $tokenJson = & az @tokenArguments 2>$null
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message "Could not acquire a scoped Azure CLI token for '$ResourceUrl'.")
+  }
+
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tokenJson)) {
+    throw (New-AuditOperatorContextException -Message "Could not acquire a scoped Azure CLI token for '$ResourceUrl'.")
+  }
+
+  try {
+    $tokenResponse = $tokenJson | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message "Azure CLI returned malformed token metadata for '$ResourceUrl'.")
+  }
+
+  if ($null -eq $tokenResponse -or $tokenResponse -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message "Azure CLI returned malformed token metadata for '$ResourceUrl'.")
+  }
+
+  $accessTokenProperty = $tokenResponse.PSObject.Properties['accessToken']
+  $subscriptionProperty = $tokenResponse.PSObject.Properties['subscription']
+  $tenantProperty = $tokenResponse.PSObject.Properties['tenant']
+  $invalidSubscriptionMetadata = $null -eq $subscriptionProperty -or
+    $subscriptionProperty.Value -isnot [string] -or
+    [string]$subscriptionProperty.Value -ine $SubscriptionId
+  if ($null -eq $accessTokenProperty -or $null -eq $tenantProperty -or
+      $accessTokenProperty.Value -isnot [string] -or $tenantProperty.Value -isnot [string] -or
+      [string]::IsNullOrWhiteSpace($accessTokenProperty.Value) -or
+      [string]$tenantProperty.Value -ine $TenantId -or $invalidSubscriptionMetadata) {
+    throw (New-AuditOperatorContextException -Message "Azure CLI token metadata does not match the explicit subscription and tenant selectors for '$ResourceUrl'.")
+  }
+
+  $accessToken = [string]$accessTokenProperty.Value
+  if ($IncludeOperatorIdentity) {
+    $accountAfterToken = Get-AuditOperatorAccount -SubscriptionId $SubscriptionId -TenantId $TenantId
+    $operatorIdentity = Get-AuditOperatorIdentity -Account $account
+    $operatorIdentityAfterToken = Get-AuditOperatorIdentity -Account $accountAfterToken
+    if ($operatorIdentity -ine $operatorIdentityAfterToken) {
+      throw (New-AuditOperatorContextException -Message 'The selected Azure CLI operator changed during token acquisition.')
+    }
+
+    return [pscustomobject]@{
+      AccessToken = $accessToken
+      OperatorIdentity = $operatorIdentity
+    }
+  }
+
+  return $accessToken
+}
+
+function Assert-AuditOperatorSubscriptionEnabled {
+  param([Parameter(Mandatory = $true)][hashtable]$AzdValues)
+
+  $subscriptionId = Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $AzdValues
+  $tenantId = Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $AzdValues
+  $tokenContext = Get-AuditScopedAccessToken `
+    -ResourceUrl 'https://management.azure.com' `
+    -SubscriptionId $subscriptionId `
+    -TenantId $tenantId `
+    -IncludeOperatorIdentity
+  $armToken = $tokenContext.AccessToken
+  $uri = 'https://management.azure.com/subscriptions/{0}?api-version=2022-12-01' -f $subscriptionId
+
+  try {
+    $response = Invoke-WebRequest `
+      -Method GET `
+      -Uri $uri `
+      -Headers @{ Authorization = "Bearer $armToken" } `
+      -MaximumRedirection 0 `
+      -TimeoutSec 30 `
+      -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Could not verify the explicitly selected Azure subscription state.')
+  }
+
+  if ($null -eq $response) {
+    throw (New-AuditOperatorContextException -Message 'Azure returned an incomplete selected-subscription response.')
+  }
+
+  $statusCodeProperty = $response.PSObject.Properties['StatusCode']
+  $contentProperty = $response.PSObject.Properties['Content']
+  $statusCode = 0
+  if ($null -eq $statusCodeProperty -or $null -eq $contentProperty -or
+      -not [int]::TryParse([string]$statusCodeProperty.Value, [ref]$statusCode) -or $statusCode -ne 200 -or
+      $contentProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($contentProperty.Value)) {
+    throw (New-AuditOperatorContextException -Message 'Azure returned an incomplete selected-subscription response.')
+  }
+
+  try {
+    $subscription = $contentProperty.Value | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+  }
+  catch {
+    throw (New-AuditOperatorContextException -Message 'Azure returned malformed selected-subscription metadata.')
+  }
+
+  if ($null -eq $subscription -or $subscription -isnot [System.Management.Automation.PSCustomObject]) {
+    throw (New-AuditOperatorContextException -Message 'Azure returned malformed selected-subscription metadata.')
+  }
+
+  $idProperty = $subscription.PSObject.Properties['id']
+  $subscriptionIdProperty = $subscription.PSObject.Properties['subscriptionId']
+  $tenantIdProperty = $subscription.PSObject.Properties['tenantId']
+  $stateProperty = $subscription.PSObject.Properties['state']
+  if ($null -eq $idProperty -or $null -eq $subscriptionIdProperty -or
+      $null -eq $tenantIdProperty -or $null -eq $stateProperty -or
+      $idProperty.Value -isnot [string] -or $subscriptionIdProperty.Value -isnot [string] -or
+      $tenantIdProperty.Value -isnot [string] -or $stateProperty.Value -isnot [string] -or
+      [string]$idProperty.Value -ine "/subscriptions/$subscriptionId" -or
+      [string]$subscriptionIdProperty.Value -ine $subscriptionId -or
+      [string]$tenantIdProperty.Value -ine $tenantId -or
+      [string]$stateProperty.Value -cne 'Enabled') {
+    throw (New-AuditOperatorContextException -Message 'Azure subscription metadata does not match the selected target or is not Enabled.')
+  }
+
+  $after = Get-AuditOperatorAccount -SubscriptionId $subscriptionId -TenantId $tenantId
+  if ((Get-AuditOperatorIdentity -Account $after) -ine $tokenContext.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure CLI operator changed during subscription verification.')
+  }
+
+  return [pscustomobject]@{
+    SubscriptionId = $subscriptionId
+    TenantId = $tenantId
+    OperatorIdentity = $tokenContext.OperatorIdentity
+  }
+}
+
 function Ensure-PowerShellModule {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -68,10 +360,22 @@ function Get-RunbooksPath {
 }
 
 function Get-AzdEnvironmentValues {
+  param(
+    [Parameter(Mandatory = $false)][switch]$RequireSuccess,
+    [Parameter(Mandatory = $false)][string]$EnvironmentName
+  )
+
   Ensure-Command -Name 'azd'
 
   $values = @{}
-  $lines = & azd env get-values --no-prompt 2>$null
+  $arguments = @('env', 'get-values', '--no-prompt')
+  if (-not [string]::IsNullOrWhiteSpace($EnvironmentName)) {
+    $arguments += @('--environment', $EnvironmentName.Trim())
+  }
+  $lines = & azd @arguments 2>$null
+  if ($RequireSuccess -and $LASTEXITCODE -ne 0) {
+    throw 'Could not read the selected azd environment values.'
+  }
   foreach ($line in $lines) {
     if ([string]::IsNullOrWhiteSpace($line)) {
       continue
@@ -80,6 +384,9 @@ function Get-AzdEnvironmentValues {
     if ($line -match '^(?:export\s+)?(?<name>[A-Za-z0-9_]+)=(?<value>.*)$') {
       $name = $matches['name'].ToUpperInvariant()
       $value = $matches['value'].Trim()
+      if ($RequireSuccess -and $values.ContainsKey($name)) {
+        throw (New-AuditOperatorContextException -Message 'The selected azd environment returned duplicate keys.')
+      }
 
       if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
         $value = $value.Substring(1, $value.Length - 2)
@@ -90,6 +397,169 @@ function Get-AzdEnvironmentValues {
   }
 
   return $values
+}
+
+function Get-AuditHookEnvironmentName {
+  $environmentName = [System.Environment]::GetEnvironmentVariable('AZURE_ENV_NAME')
+  if ([string]::IsNullOrWhiteSpace($environmentName)) {
+    throw (New-AuditOperatorContextException -Message 'AZURE_ENV_NAME must identify the azd environment for this hook.')
+  }
+
+  return $environmentName.Trim()
+}
+
+function Get-AuditPinnedAzdEnvironmentValues {
+  param(
+    [Parameter(Mandatory = $true)][string]$EnvironmentName,
+    [Parameter(Mandatory = $false)][switch]$RequireResourceValues
+  )
+
+  $expectedEnvironmentName = $EnvironmentName.Trim()
+  if ([string]::IsNullOrWhiteSpace($expectedEnvironmentName)) {
+    throw (New-AuditOperatorContextException -Message 'An explicit azd environment name is required for this hook.')
+  }
+
+  $processEnvironmentName = Get-AuditHookEnvironmentName
+  if ($processEnvironmentName -ine $expectedEnvironmentName) {
+    throw (New-AuditOperatorContextException -Message 'The process azd environment changed during this hook.')
+  }
+
+  $azdValues = Get-AzdEnvironmentValues -RequireSuccess -EnvironmentName $expectedEnvironmentName
+  if ($azdValues.ContainsKey('AZURE_ENV_NAME') -and
+      -not [string]::IsNullOrWhiteSpace([string]$azdValues['AZURE_ENV_NAME']) -and
+      [string]$azdValues['AZURE_ENV_NAME'] -ine $expectedEnvironmentName) {
+    throw (New-AuditOperatorContextException -Message 'The explicitly selected azd environment returned a different environment name.')
+  }
+
+  foreach ($name in @('AZURE_SUBSCRIPTION_ID', 'AZURE_TENANT_ID', 'AZURE_RESOURCE_GROUP', 'AUTOMATION_ACCOUNT_NAME')) {
+    $processValue = [System.Environment]::GetEnvironmentVariable($name)
+    $environmentValue = if ($azdValues.ContainsKey($name)) { [string]$azdValues[$name] } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($processValue) -and
+        -not [string]::IsNullOrWhiteSpace($environmentValue) -and
+        $processValue -ine $environmentValue) {
+      throw (New-AuditOperatorContextException -Message "The process and explicitly selected azd values for '$name' do not match.")
+    }
+  }
+
+  if ($RequireResourceValues) {
+    foreach ($name in @('AZURE_RESOURCE_GROUP', 'AUTOMATION_ACCOUNT_NAME')) {
+      if (-not $azdValues.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$azdValues[$name])) {
+        throw (New-AuditOperatorContextException -Message "The explicitly selected azd environment is missing '$name'.")
+      }
+    }
+  }
+
+  return $azdValues
+}
+
+function Get-AuditHookTargetValues {
+  param([hashtable]$AzdValues, [string[]]$Names)
+
+  $targetValues = @{}
+  foreach ($name in $Names) {
+    $stored = [string]$azdValues[$name]
+    $process = [Environment]::GetEnvironmentVariable($name)
+    if ($stored -and $process -and $stored -ine $process) {
+      throw (New-AuditOperatorContextException -Message "The process and selected azd target '$name' disagree.")
+    }
+    $targetValues[$name] = Get-ValueFromEnvironment -Name $name -AzdValues $azdValues
+  }
+  return $targetValues
+}
+
+function New-AuditHookContext {
+  param([string]$EnvironmentName, [hashtable]$AzdValues, [string[]]$TargetNames)
+
+  $targetNames = @('AZURE_RESOURCE_GROUP', 'AUTOMATION_ACCOUNT_NAME') + $TargetNames
+  $values = Get-AuditHookTargetValues -AzdValues $AzdValues -Names $targetNames
+  [pscustomobject]@{
+    EnvironmentName = $EnvironmentName
+    Operator = Assert-AuditOperatorSubscriptionEnabled -AzdValues $AzdValues
+    Values = $values
+  }
+}
+
+function Assert-AuditHookContext {
+  param($Context)
+
+  if ($null -eq $Context) {
+    throw (New-AuditOperatorContextException -Message 'Writes require a pinned Auditing hook context.')
+  }
+  $azdValues = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $Context.EnvironmentName
+  $operator = Assert-AuditOperatorSubscriptionEnabled -AzdValues $azdValues
+  if ($operator.SubscriptionId -ine $Context.Operator.SubscriptionId -or
+      $operator.TenantId -ine $Context.Operator.TenantId -or
+      $operator.OperatorIdentity -ine $Context.Operator.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure target or CLI operator changed before a write.')
+  }
+  if ($Context.Values.ContainsKey('AUTOMATION_PRINCIPAL_ID')) {
+    $group = $Context.Values['AZURE_RESOURCE_GROUP']
+    $name = $Context.Values['AUTOMATION_ACCOUNT_NAME']
+    $expectedId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}' -f $operator.SubscriptionId, $group, $name
+    try {
+      $raw = & az automation account show --subscription $operator.SubscriptionId --resource-group $group --name $name --only-show-errors -o json 2>$null
+      if ($LASTEXITCODE -ne 0) { throw 'Account read failed.' }
+      $account = $raw | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+      if ($account.id -isnot [string] -or $account.id -ine $expectedId -or
+          $account.identity.principalId -isnot [string] -or $account.identity.principalId -ine $Context.Values['AUTOMATION_PRINCIPAL_ID']) {
+        throw 'Account or principal differs from the ownership target.'
+      }
+    } catch {
+      throw (New-AuditOperatorContextException -Message 'The provisioned Automation account or managed identity could not be reverified before a write.')
+    }
+    $actor = Get-AuditOperatorAccount -SubscriptionId $operator.SubscriptionId -TenantId $operator.TenantId
+    if ((Get-AuditOperatorIdentity -Account $actor) -ine $operator.OperatorIdentity) {
+      throw (New-AuditOperatorContextException -Message 'The selected Azure CLI operator changed during Automation ownership verification.')
+    }
+  }
+  $selectors = Get-AuditPinnedAzdEnvironmentValues -EnvironmentName $Context.EnvironmentName
+  $current = Get-AuditHookTargetValues -AzdValues $selectors -Names @($Context.Values.Keys)
+  foreach ($name in $current.Keys) {
+    if ($current[$name] -ine $Context.Values[$name]) {
+      throw (New-AuditOperatorContextException -Message "The selected azd target '$name' changed before a write.")
+    }
+  }
+  if ((Get-AuditOperatorTargetSelector -Name 'AZURE_SUBSCRIPTION_ID' -AzdValues $selectors) -ine $operator.SubscriptionId -or
+      (Get-AuditOperatorTargetSelector -Name 'AZURE_TENANT_ID' -AzdValues $selectors) -ine $operator.TenantId) {
+    throw (New-AuditOperatorContextException -Message 'The selected Azure selectors changed during write verification.')
+  }
+}
+
+function Set-AuditHookEnvironmentValue {
+  param([string]$Name, [string]$Value, $Context)
+
+  Assert-AuditHookContext -Context $Context
+  Set-AzdEnvironmentValue -Name $Name -Value $Value -EnvironmentName $Context.EnvironmentName
+  if ($Context.Values.ContainsKey($Name)) { $Context.Values[$Name] = $Value }
+}
+
+function Assert-AuditAutomationWrite {
+  param($Context, [string]$SubscriptionId, [string]$ResourceGroupName, [string]$AutomationAccountName, [string]$RunbookName)
+
+  Assert-AuditHookContext -Context $Context
+  if ($SubscriptionId -ine $Context.Operator.SubscriptionId -or
+      $ResourceGroupName -ine $Context.Values['AZURE_RESOURCE_GROUP'] -or
+      $AutomationAccountName -ine $Context.Values['AUTOMATION_ACCOUNT_NAME']) {
+    throw (New-AuditOperatorContextException -Message 'The requested Automation write does not match the pinned hook target.')
+  }
+  if ($RunbookName) {
+    $allowedRunbooks = @('Enable-AdvancedAuditing', $Context.Values['VALIDATE_CONNECTION_RUNBOOK_NAME'], $Context.Values['VALIDATE_CONFIGURATION_RUNBOOK_NAME'])
+    if ($RunbookName -notin $allowedRunbooks) {
+      throw (New-AuditOperatorContextException -Message 'The requested runbook does not match a pinned hook target.')
+    }
+  }
+}
+
+function Get-AuditHookArmToken {
+  param($Context, [string]$SubscriptionId, [string]$TenantId)
+
+  $token = Get-AuditScopedAccessToken -SubscriptionId $SubscriptionId -TenantId $TenantId `
+    -ResourceUrl 'https://management.azure.com' -IncludeOperatorIdentity
+  if ($null -eq $Context -or $SubscriptionId -ine $Context.Operator.SubscriptionId -or $TenantId -ine $Context.Operator.TenantId -or
+      $token.OperatorIdentity -ine $Context.Operator.OperatorIdentity) {
+    throw (New-AuditOperatorContextException -Message 'The ARM token does not match the pinned hook operator and tenant.')
+  }
+  return $token.AccessToken
 }
 
 function Get-ValueFromEnvironment {
@@ -114,11 +584,16 @@ function Get-ValueFromEnvironment {
 function Set-AzdEnvironmentValue {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
-    [Parameter(Mandatory = $true)][string]$Value
+    [Parameter(Mandatory = $true)][string]$Value,
+    [Parameter(Mandatory = $false)][string]$EnvironmentName
   )
 
   Ensure-Command -Name 'azd'
-  & azd env set $Name $Value --no-prompt | Out-Null
+  $arguments = @('env', 'set', $Name, $Value, '--no-prompt')
+  if (-not [string]::IsNullOrWhiteSpace($EnvironmentName)) {
+    $arguments += @('--environment', $EnvironmentName.Trim())
+  }
+  & azd @arguments | Out-Null
   if ($LASTEXITCODE -ne 0) {
     throw "Could not persist azd environment value '$Name'."
   }
@@ -141,11 +616,15 @@ function Get-EnvironmentSuffix {
 }
 
 function Get-AuditTemplateNames {
-  $azdValues = Get-AzdEnvironmentValues
+  param([Parameter(Mandatory = $false)][hashtable]$AzdValues)
+
+  if ($null -eq $AzdValues) {
+    $AzdValues = Get-AzdEnvironmentValues
+  }
   $environmentName = [System.Environment]::GetEnvironmentVariable('AZURE_ENV_NAME')
   if ([string]::IsNullOrWhiteSpace($environmentName)) {
-    if ($azdValues.ContainsKey('AZURE_ENV_NAME')) {
-      $environmentName = [string]$azdValues['AZURE_ENV_NAME']
+    if ($AzdValues.ContainsKey('AZURE_ENV_NAME')) {
+      $environmentName = [string]$AzdValues['AZURE_ENV_NAME']
     }
   }
 
@@ -162,7 +641,7 @@ function Get-AuditTemplateNames {
     $automationSuffix = $automationSuffix.Substring($automationSuffix.Length - 24)
   }
 
-  $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $azdValues
+  $resourceGroupName = Get-ValueFromEnvironment -Name 'AZURE_RESOURCE_GROUP' -AzdValues $AzdValues
   if ([string]::IsNullOrWhiteSpace($resourceGroupName)) {
     $resourceGroupName = "rg-$environmentName"
   }
@@ -182,13 +661,19 @@ function ConvertTo-AutomationVariableLiteral {
 function Set-AutomationVariableValue {
   param(
     [Parameter(Mandatory = $true)][string]$SubscriptionId,
+    [Parameter(Mandatory = $true)][string]$TenantId,
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$VariableName,
-    [Parameter(Mandatory = $true)][string]$Value
+    [Parameter(Mandatory = $true)][string]$Value,
+    $HookContext
   )
 
-  $uri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/variables/{3}?api-version=2023-11-01' -f $SubscriptionId, $ResourceGroupName, $AutomationAccountName, $VariableName)
+  $encodedVariableName = [uri]::EscapeDataString($VariableName)
+  if ($encodedVariableName -cin @('.', '..')) {
+    throw (New-AuditOperatorContextException -Message 'The Automation variable name is invalid.')
+  }
+  $uri = ('https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Automation/automationAccounts/{2}/variables/{3}?api-version=2023-11-01' -f $SubscriptionId, $ResourceGroupName, $AutomationAccountName, $encodedVariableName)
   $payload = @{
     properties = @{
       description = "Updated by postprovision for $VariableName"
@@ -197,15 +682,17 @@ function Set-AutomationVariableValue {
     }
   } | ConvertTo-Json -Depth 5 -Compress
 
-  $armToken = & az account get-access-token --resource https://management.azure.com --query accessToken -o tsv --only-show-errors
-  if ([string]::IsNullOrWhiteSpace($armToken)) {
-    throw 'Could not acquire an Azure Resource Manager access token from Azure CLI.'
+  $armToken = Get-AuditHookArmToken $HookContext $SubscriptionId $TenantId
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName
+  if ($VariableName -ine $HookContext.Values['EXCHANGE_ORGANIZATION_VARIABLE_NAME'] -and
+      ($VariableName -ine 'AuditRetentionSetupState' -or $HookContext.Values['OPERATIONAL_ALERTS_ENABLED'] -ine 'true')) {
+    throw (New-AuditOperatorContextException -Message 'The requested variable does not match a pinned hook target.')
   }
-
   Invoke-RestMethod `
     -Method PUT `
     -Uri $uri `
     -Headers @{ Authorization = "Bearer $($armToken.Trim())" } `
+    -MaximumRedirection 0 `
     -ContentType 'application/json' `
     -Body $payload | Out-Null
 }
@@ -216,7 +703,8 @@ function Publish-AutomationRunbookContent {
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$RunbookName,
-    [Parameter(Mandatory = $true)][string]$FilePath
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    $HookContext
   )
 
   if (-not (Test-Path -Path $FilePath)) {
@@ -234,6 +722,7 @@ function Publish-AutomationRunbookContent {
     throw "Could not inspect Automation runbook '$RunbookName' before publishing."
   }
 
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName $RunbookName
   & az automation runbook replace-content `
     --subscription $SubscriptionId `
     --resource-group $ResourceGroupName `
@@ -246,6 +735,7 @@ function Publish-AutomationRunbookContent {
     throw "Could not replace content for Automation runbook '$RunbookName'."
   }
 
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName $RunbookName
   & az automation runbook publish `
     --subscription $SubscriptionId `
     --resource-group $ResourceGroupName `
@@ -353,7 +843,8 @@ function Start-AutomationRunbookAndWait {
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $true)][string]$AutomationAccountName,
     [Parameter(Mandatory = $true)][string]$RunbookName,
-    [Parameter(Mandatory = $false)][hashtable]$Parameters
+    [Parameter(Mandatory = $false)][hashtable]$Parameters,
+    $HookContext
   )
 
   $commandArgs = @(
@@ -373,7 +864,9 @@ function Start-AutomationRunbookAndWait {
     }
   }
 
+  Assert-AuditAutomationWrite $HookContext $SubscriptionId $ResourceGroupName $AutomationAccountName $RunbookName
   $job = & az @commandArgs | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw 'Could not start the selected Automation runbook.' }
 
   $jobId = ''
   if ($job.jobId) {

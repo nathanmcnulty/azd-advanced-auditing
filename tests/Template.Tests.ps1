@@ -380,6 +380,7 @@ Describe 'Automation runbook publication' {
   ) {
     & {
       . $publisherDefinition
+      function Assert-AuditAutomationWrite { param($Context, $SubscriptionId, $ResourceGroupName, $AutomationAccountName) }
       $filePath = Join-Path $TestDrive 'runbook.ps1'
       Set-Content -LiteralPath $filePath -Value 'Write-Output "fixture"'
       $script:publisherCalls = [System.Collections.Generic.List[string]]::new()
